@@ -21,19 +21,49 @@ App → transparent strict route (optional) → SOCKS5 (127.0.0.1:1080) → Tor 
 | **Open**   | Stack is up, direct egress still allowed — useful for diagnostics       |
 | **Strict** | Transparent route active, bypass rejected — fail-closed for web traffic |
 
-## Quick start
+## Usage
+
+All commands run from the project root directory:
+
+```bash
+cd ~/Desktop/vremen/iron_shield/git
+chmod +x ./bin/irondome ./lib/*.sh
+```
+
+### First-time setup
 
 ```bash
 ./bin/irondome setup        # interactive configuration wizard
-./bin/irondome bridges      # manage Tor bridges
-./bin/irondome outline      # set Outline/Shadowsocks key
 ./bin/irondome render       # generate config files from templates
-./bin/irondome install --root /opt/irondome   # install generated files
-./bin/irondome start        # start all services
+sudo ./bin/irondome install # install generated files to system
+sudo iron-dome-start        # start all services
 ./bin/irondome status       # check chain health
 ./bin/irondome doctor       # diagnose common issues
-./bin/irondome stop         # stop all services
 ```
+
+### Stop
+
+```bash
+sudo iron-dome-stop
+```
+
+### Dry run (no system changes)
+
+```bash
+./bin/irondome render
+./bin/irondome install --root /tmp/irondome-test-root
+```
+
+### Other commands
+
+```bash
+./bin/irondome bridges      # manage Tor bridges
+./bin/irondome outline      # set Outline/Shadowsocks key
+./bin/irondome backup       # backup current state
+./bin/irondome restore      # restore from backup
+```
+
+> Commands like `./bin/irondome ...` only work from the project root. If you are inside `git/bin/`, use `./irondome ...` instead.
 
 ## Prerequisites
 
