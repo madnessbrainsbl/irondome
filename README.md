@@ -23,7 +23,11 @@ App → transparent strict route (optional) → SOCKS5 (127.0.0.1:1080) → Tor 
 
 ## Usage
 
-All commands run from the project root directory (`iron_shield/git`):
+All commands run from the project root directory:
+
+```
+path/iron_shield/git
+```
 
 ```bash
 chmod +x ./bin/irondome ./lib/*.sh
