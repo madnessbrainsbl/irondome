@@ -1,0 +1,96 @@
+#!/bin/bash
+set -euo pipefail
+
+KUID="$(id -u kali)"
+CUID="$(id -u cliproxysvc)"
+PUID="$(id -u privoxy)"
+OUTLINE_IP="$(python3 - <<'PY'
+import json
+from pathlib import Path
+cfg=json.loads(Path('/opt/irondome/config/outline.json').read_text())
+print(cfg['server'])
+PY
+)"
+OUTLINE_PORT="$(python3 - <<'PY'
+import json
+from pathlib import Path
+cfg=json.loads(Path('/opt/irondome/config/outline.json').read_text())
+print(cfg['server_port'])
+PY
+)"
+TRANSPARENT_MARK_A="0x2023/0xffffffff"
+TRANSPARENT_MARK_B="0x2024/0xffffffff"
+INCLUDE_ROOT_WEB="yes"
+
+delete_rule() {
+  local tool="$1"; shift
+  while "$tool" -C OUTPUT "$@" 2>/dev/null; do "$tool" -D OUTPUT "$@"; done
+}
+
+delete_mangle_rule() {
+  local tool="$1"; shift
+  while "$tool" -t mangle -C OUTPUT "$@" 2>/dev/null; do "$tool" -t mangle -D OUTPUT "$@"; done
+}
+
+insert_pair() {
+  local tool="$1"; local uid="$2"
+  delete_rule "$tool" -m owner --uid-owner "$uid" ! -o lo -j REJECT
+  delete_rule "$tool" -m owner --uid-owner "$uid" -o lo -j ACCEPT
+  "$tool" -I OUTPUT 1 -m owner --uid-owner "$uid" ! -o lo -j REJECT
+  "$tool" -I OUTPUT 1 -m owner --uid-owner "$uid" -o lo -j ACCEPT
+}
+
+insert_user_ipv4() {
+  local uid="$1"
+  delete_mangle_rule iptables -m owner --uid-owner "$uid" ! -o lo -j MARK --set-xmark "$TRANSPARENT_MARK_A"
+  delete_rule iptables -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_A" -j ACCEPT
+  delete_rule iptables -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_B" -j ACCEPT
+  delete_rule iptables -m owner --uid-owner "$uid" ! -o lo -j REJECT
+  delete_rule iptables -m owner --uid-owner "$uid" -o lo -j ACCEPT
+  iptables -t mangle -I OUTPUT 1 -m owner --uid-owner "$uid" ! -o lo -j MARK --set-xmark "$TRANSPARENT_MARK_A"
+  iptables -I OUTPUT 1 -m owner --uid-owner "$uid" ! -o lo -j REJECT
+  iptables -I OUTPUT 1 -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_B" -j ACCEPT
+  iptables -I OUTPUT 1 -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_A" -j ACCEPT
+  iptables -I OUTPUT 1 -m owner --uid-owner "$uid" -o lo -j ACCEPT
+}
+
+insert_user_ipv6() {
+  local uid="$1"
+  delete_mangle_rule ip6tables -m owner --uid-owner "$uid" ! -o lo -j MARK --set-xmark "$TRANSPARENT_MARK_A"
+  delete_rule ip6tables -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_A" -j ACCEPT
+  delete_rule ip6tables -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_B" -j ACCEPT
+  delete_rule ip6tables -m owner --uid-owner "$uid" ! -o lo -j REJECT
+  delete_rule ip6tables -m owner --uid-owner "$uid" -o lo -j ACCEPT
+  ip6tables -t mangle -I OUTPUT 1 -m owner --uid-owner "$uid" ! -o lo -j MARK --set-xmark "$TRANSPARENT_MARK_A"
+  ip6tables -I OUTPUT 1 -m owner --uid-owner "$uid" ! -o lo -j REJECT
+  ip6tables -I OUTPUT 1 -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_B" -j ACCEPT
+  ip6tables -I OUTPUT 1 -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_A" -j ACCEPT
+  ip6tables -I OUTPUT 1 -m owner --uid-owner "$uid" -o lo -j ACCEPT
+}
+
+insert_cliproxy_ipv4() {
+  delete_rule iptables -m owner --uid-owner "$CUID" -d "$OUTLINE_IP" -p tcp --dport "$OUTLINE_PORT" -j ACCEPT
+  delete_rule iptables -m owner --uid-owner "$CUID" ! -o lo -j REJECT
+  delete_rule iptables -m owner --uid-owner "$CUID" -o lo -j ACCEPT
+  iptables -I OUTPUT 1 -m owner --uid-owner "$CUID" ! -o lo -j REJECT
+  iptables -I OUTPUT 1 -m owner --uid-owner "$CUID" -d "$OUTLINE_IP" -p tcp --dport "$OUTLINE_PORT" -j ACCEPT
+  iptables -I OUTPUT 1 -m owner --uid-owner "$CUID" -o lo -j ACCEPT
+}
+
+insert_cliproxy_ipv6() {
+  delete_rule ip6tables -m owner --uid-owner "$CUID" ! -o lo -j REJECT
+  delete_rule ip6tables -m owner --uid-owner "$CUID" -o lo -j ACCEPT
+  ip6tables -I OUTPUT 1 -m owner --uid-owner "$CUID" ! -o lo -j REJECT
+  ip6tables -I OUTPUT 1 -m owner --uid-owner "$CUID" -o lo -j ACCEPT
+}
+
+insert_pair iptables "$PUID"
+insert_pair ip6tables "$PUID"
+insert_user_ipv4 "$KUID"
+insert_user_ipv6 "$KUID"
+if [[ "$INCLUDE_ROOT_WEB" == "yes" ]]; then
+  insert_user_ipv4 0
+  insert_user_ipv6 0
+fi
+insert_cliproxy_ipv4
+insert_cliproxy_ipv6

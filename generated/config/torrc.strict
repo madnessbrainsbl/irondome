@@ -1,0 +1,11 @@
+SocksPort 127.0.0.1:9050
+ControlPort 127.0.0.1:9051
+CookieAuthentication 1
+UseBridges 1
+ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy
+ConfluxEnabled 0
+AvoidDiskWrites 1
+
+# Replace with your own bridges
+# Bridge obfs4 <host>:<port> <fingerprint> cert=<cert> iat-mode=<mode>
+Bridge obfs4 1.2.3.4:443 FINGERPRINT cert=TEST iat-mode=0

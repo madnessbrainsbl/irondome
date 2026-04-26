@@ -1,0 +1,13 @@
+[Unit]
+Description=Iron Dome strict no-leak lock
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/iron-dome-lock-apply
+ExecStop=/usr/local/libexec/iron-dome-lock-clear
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,4 @@
+#!/bin/bash
+set -euo pipefail
+systemctl stop iron-dome-lock.service iron-transparent.service iron-ss-outline.service iron-tor.service iron-privoxy.service 2>/dev/null || true
+/usr/local/libexec/iron-dome-lock-clear 2>/dev/null || true

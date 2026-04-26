@@ -1,0 +1,15 @@
+[Unit]
+Description=Iron Dome Outline over Tor
+After=iron-tor.service
+Requires=iron-tor.service
+
+[Service]
+Type=simple
+User=cliproxysvc
+Group=cliproxysvc
+ExecStart=/usr/bin/torsocks /usr/bin/ss-local -c /opt/irondome/config/outline.json
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

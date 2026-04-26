@@ -1,0 +1,23 @@
+#!/bin/bash
+set -euo pipefail
+
+probe_user_network() {
+  runuser -u "kali" -- sh -lc "curl -k -s --max-time 8 https://1.1.1.1 >/dev/null 2>&1 && curl -s --max-time 8 https://example.com >/dev/null 2>&1"
+}
+
+echo "[IRON DOME] stopping strict stack"
+systemctl stop iron-dome-lock.service iron-transparent.service iron-ss-outline.service iron-tor.service iron-privoxy.service 2>/dev/null || true
+
+echo
+echo "=== SERVICES ==="
+for s in iron-tor.service iron-ss-outline.service iron-transparent.service iron-dome-lock.service iron-privoxy.service; do
+  printf "%-24s %s\n" "$s" "$(systemctl is-active "$s" 2>/dev/null || true)"
+done
+
+echo
+echo "=== DIRECT INTERNET (kali) ==="
+printf "DIRECT:             "
+if probe_user_network; then echo OPEN; else echo FAILED; fi
+
+echo
+echo "[IRON DOME] direct internet restored"

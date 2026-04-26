@@ -1,0 +1,9 @@
+{
+  "server": "example.com",
+  "server_port": 8080,
+  "password": "pass",
+  "method": "aes-256-gcm",
+  "local_address": "127.0.0.1",
+  "local_port": 1080,
+  "timeout": 300
+}

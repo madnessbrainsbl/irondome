@@ -1,0 +1,30 @@
+Iron Dome rendered configuration
+
+Protected user:        kali
+Install prefix:        /opt/irondome
+Integration profile:   none
+Local HTTP proxy:      yes
+Strict mode:           yes
+Open mode:             yes
+Google forward:        no
+Boot cleanup:          yes
+Root web traffic:      yes
+Transparent MTU:       1200
+
+Gateway binary:        /opt/CLIProxyAPIPlus/cliproxy
+Gateway workdir:       /opt/CLIProxyAPIPlus
+Gateway auth dir:      /var/lib/cliproxy/auth
+Gateway storage dir:   /var/lib/cliproxy
+
+Generated files:
+- /home/kali/Desktop/vremen/iron_shield/git/generated/config/torrc.strict
+- /home/kali/Desktop/vremen/iron_shield/git/generated/config/outline.json
+- /home/kali/Desktop/vremen/iron_shield/git/generated/bin/iron-dome-start
+- /home/kali/Desktop/vremen/iron_shield/git/generated/bin/iron-dome-stop
+- /home/kali/Desktop/vremen/iron_shield/git/generated/bin/iron-dome-open
+- /home/kali/Desktop/vremen/iron_shield/git/generated/libexec/iron-transparent-generate
+- /home/kali/Desktop/vremen/iron_shield/git/generated/libexec/iron-dome-lock-apply
+- /home/kali/Desktop/vremen/iron_shield/git/generated/libexec/iron-dome-lock-clear
+- /home/kali/Desktop/vremen/iron_shield/git/generated/libexec/iron-dome-cleanup
+- /home/kali/Desktop/vremen/iron_shield/git/generated/systemd/*.service
+- /home/kali/Desktop/vremen/iron_shield/git/generated/config/privoxy.conf

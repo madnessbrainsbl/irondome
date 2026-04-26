@@ -1,0 +1,62 @@
+#!/bin/bash
+set -euo pipefail
+
+RUN_DIR="/run/iron-dome"
+CONFIG_FILE="$RUN_DIR/sing-box.json"
+KUID="$(id -u kali)"
+INCLUDE_UIDS="[$KUID"
+if [[ "yes" == "yes" ]]; then
+  INCLUDE_UIDS+=", 0"
+fi
+INCLUDE_UIDS+="]"
+
+install -d -m 0755 "$RUN_DIR"
+
+cat > "$CONFIG_FILE" <<JSON
+{
+  "log": {"level": "warn"},
+  "dns": {
+    "servers": [
+      {
+        "type": "https",
+        "tag": "remote-dns",
+        "server": "1.1.1.1",
+        "server_port": 443,
+        "path": "/dns-query",
+        "detour": "outline-socks"
+      }
+    ],
+    "final": "remote-dns",
+    "strategy": "ipv4_only"
+  },
+  "inbounds": [
+    {
+      "type": "tun",
+      "tag": "iron-tun",
+      "interface_name": "iron0",
+      "address": ["172.19.0.1/30"],
+      "mtu": 1200,
+      "auto_route": true,
+      "auto_redirect": true,
+      "strict_route": true,
+      "stack": "system",
+      "include_uid": $INCLUDE_UIDS
+    }
+  ],
+  "outbounds": [
+    {"type": "socks", "tag": "outline-socks", "server": "127.0.0.1", "server_port": 1080, "version": "5"},
+    {"type": "direct", "tag": "direct"}
+  ],
+  "route": {
+    "auto_detect_interface": true,
+    "final": "outline-socks",
+    "rules": [
+      {"action": "sniff"},
+      {"type": "logical", "mode": "or", "rules": [{"protocol": "dns"}, {"port": 53}], "action": "hijack-dns"},
+      {"network": "udp", "action": "reject"}
+    ]
+  }
+}
+JSON
+
+chmod 0644 "$CONFIG_FILE"

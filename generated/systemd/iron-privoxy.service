@@ -1,0 +1,13 @@
+[Unit]
+Description=Iron Dome local HTTP proxy
+After=iron-ss-outline.service
+Requires=iron-ss-outline.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/privoxy --no-daemon /opt/irondome/config/privoxy.conf
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

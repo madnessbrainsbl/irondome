@@ -1,0 +1,91 @@
+#!/bin/bash
+set -euo pipefail
+
+LOCK_MODE="strict"
+if [[ "${1:-}" == "--no-lock" ]]; then
+  LOCK_MODE="open"
+fi
+
+probe_user_network() {
+  runuser -u "kali" -- sh -lc "curl -k -s --max-time 8 https://1.1.1.1 >/dev/null 2>&1 && curl -s --max-time 8 https://example.com >/dev/null 2>&1"
+}
+
+print_status() {
+  local label="$1"
+  local cmd="$2"
+  printf "%-20s " "$label"
+  if eval "$cmd" >/dev/null 2>&1; then echo OK; else echo FAILED; fi
+}
+
+echo "[IRON DOME] reloading units"
+systemctl daemon-reload
+echo "[IRON DOME] stopping legacy units"
+systemctl stop iron-transparent.service iron-dome-lock.service iron-ss-outline.service iron-tor.service iron-privoxy.service 2>/dev/null || true
+
+echo "[IRON DOME] starting Tor with bridges"
+systemctl restart iron-tor.service
+echo -n "[IRON DOME] waiting for Tor"
+for i in $(seq 1 45); do
+  if curl --socks5-hostname 127.0.0.1:9050 -s --max-time 10 https://check.torproject.org/api/ip >/dev/null; then echo " OK"; break; fi
+  if [[ "$i" -eq 45 ]]; then echo " FAIL"; exit 1; fi
+  echo -n "."; sleep 2
+done
+
+echo "[IRON DOME] starting Outline over Tor"
+systemctl restart iron-ss-outline.service
+echo -n "[IRON DOME] waiting for 1080"
+for i in $(seq 1 30); do
+  if curl --socks5-hostname 127.0.0.1:1080 -s --max-time 10 https://api.ipify.org >/dev/null; then echo " OK"; break; fi
+  if [[ "$i" -eq 30 ]]; then echo " FAIL"; exit 1; fi
+  echo -n "."; sleep 2
+done
+
+echo "[IRON DOME] starting local HTTP proxy"
+systemctl restart iron-privoxy.service
+echo -n "[IRON DOME] waiting for 8119"
+for i in $(seq 1 20); do
+  if curl -x http://127.0.0.1:8119 -s --max-time 5 https://api.ipify.org >/dev/null 2>&1; then echo " OK"; break; fi
+  if [[ "$i" -eq 20 ]]; then echo " FAIL"; exit 1; fi
+  echo -n "."; sleep 2
+done
+MODELS_COUNT="disabled"
+
+if [[ "$LOCK_MODE" == "strict" ]]; then
+  echo "[IRON DOME] starting transparent route"
+  systemctl restart iron-transparent.service
+  systemctl restart iron-dome-lock.service
+else
+  systemctl stop iron-transparent.service 2>/dev/null || true
+  systemctl stop iron-dome-lock.service 2>/dev/null || true
+fi
+
+echo
+echo "=== SERVICES ==="
+for s in iron-tor.service iron-ss-outline.service iron-transparent.service iron-dome-lock.service; do
+  printf "%-24s %s\n" "$s" "$(systemctl is-active "$s" 2>/dev/null || true)"
+done
+printf "%-24s %s\n" "iron-privoxy.service" "$(systemctl is-active iron-privoxy.service 2>/dev/null || true)"
+
+echo
+echo "=== ROUTES ==="
+print_status "TOR 9050:" "curl --socks5-hostname 127.0.0.1:9050 -s --max-time 10 https://check.torproject.org/api/ip | grep -q '\"IsTor\":true'"
+print_status "OUTLINE 1080:" "curl --socks5-hostname 127.0.0.1:1080 -s --max-time 10 https://api.ipify.org"
+print_status "PRIVOXY 8119:" "curl -x http://127.0.0.1:8119 -s --max-time 10 https://api.ipify.org"
+
+echo
+if [[ "$LOCK_MODE" == "strict" ]]; then
+  echo "=== USER NETWORK (kali) ==="
+  printf "NETWORK:            "
+  if probe_user_network; then echo OK; else echo FAILED; fi
+else
+  echo "=== DIRECT EGRESS (kali) ==="
+  printf "DIRECT:             "
+  if probe_user_network; then echo OPEN; else echo BLOCKED; fi
+fi
+
+echo
+if [[ "$LOCK_MODE" == "strict" ]]; then
+  echo "[IRON DOME] strict mode active"
+else
+  echo "[IRON DOME] open mode active (no lock)"
+fi

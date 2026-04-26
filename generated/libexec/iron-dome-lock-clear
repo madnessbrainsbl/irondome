@@ -1,0 +1,72 @@
+#!/bin/bash
+set -euo pipefail
+
+KUID="$(id -u kali)"
+CUID="$(id -u cliproxysvc)"
+PUID="$(id -u privoxy)"
+OUTLINE_IP="$(python3 - <<'PY'
+import json
+from pathlib import Path
+cfg=json.loads(Path('/opt/irondome/config/outline.json').read_text())
+print(cfg['server'])
+PY
+)"
+OUTLINE_PORT="$(python3 - <<'PY'
+import json
+from pathlib import Path
+cfg=json.loads(Path('/opt/irondome/config/outline.json').read_text())
+print(cfg['server_port'])
+PY
+)"
+TRANSPARENT_MARK_A="0x2023/0xffffffff"
+TRANSPARENT_MARK_B="0x2024/0xffffffff"
+INCLUDE_ROOT_WEB="yes"
+
+delete_rule() {
+  local tool="$1"; shift
+  while "$tool" -C OUTPUT "$@" 2>/dev/null; do "$tool" -D OUTPUT "$@"; done
+}
+
+delete_mangle_rule() {
+  local tool="$1"; shift
+  while "$tool" -t mangle -C OUTPUT "$@" 2>/dev/null; do "$tool" -t mangle -D OUTPUT "$@"; done
+}
+
+for tool in iptables ip6tables; do
+  delete_rule "$tool" -m owner --uid-owner "$PUID" ! -o lo -j REJECT
+  delete_rule "$tool" -m owner --uid-owner "$PUID" -o lo -j ACCEPT
+done
+
+for uid in "$KUID"; do
+  delete_mangle_rule iptables -m owner --uid-owner "$uid" ! -o lo -j MARK --set-xmark "$TRANSPARENT_MARK_A"
+  delete_rule iptables -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_A" -j ACCEPT
+  delete_rule iptables -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_B" -j ACCEPT
+  delete_rule iptables -m owner --uid-owner "$uid" ! -o lo -j REJECT
+  delete_rule iptables -m owner --uid-owner "$uid" -o lo -j ACCEPT
+  delete_mangle_rule ip6tables -m owner --uid-owner "$uid" ! -o lo -j MARK --set-xmark "$TRANSPARENT_MARK_A"
+  delete_rule ip6tables -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_A" -j ACCEPT
+  delete_rule ip6tables -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_B" -j ACCEPT
+  delete_rule ip6tables -m owner --uid-owner "$uid" ! -o lo -j REJECT
+  delete_rule ip6tables -m owner --uid-owner "$uid" -o lo -j ACCEPT
+done
+
+if [[ "$INCLUDE_ROOT_WEB" == "yes" ]]; then
+  for uid in 0; do
+    delete_mangle_rule iptables -m owner --uid-owner "$uid" ! -o lo -j MARK --set-xmark "$TRANSPARENT_MARK_A"
+    delete_rule iptables -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_A" -j ACCEPT
+    delete_rule iptables -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_B" -j ACCEPT
+    delete_rule iptables -m owner --uid-owner "$uid" ! -o lo -j REJECT
+    delete_rule iptables -m owner --uid-owner "$uid" -o lo -j ACCEPT
+    delete_mangle_rule ip6tables -m owner --uid-owner "$uid" ! -o lo -j MARK --set-xmark "$TRANSPARENT_MARK_A"
+    delete_rule ip6tables -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_A" -j ACCEPT
+    delete_rule ip6tables -m owner --uid-owner "$uid" -m mark --mark "$TRANSPARENT_MARK_B" -j ACCEPT
+    delete_rule ip6tables -m owner --uid-owner "$uid" ! -o lo -j REJECT
+    delete_rule ip6tables -m owner --uid-owner "$uid" -o lo -j ACCEPT
+  done
+fi
+
+delete_rule iptables -m owner --uid-owner "$CUID" -d "$OUTLINE_IP" -p tcp --dport "$OUTLINE_PORT" -j ACCEPT
+delete_rule iptables -m owner --uid-owner "$CUID" ! -o lo -j REJECT
+delete_rule iptables -m owner --uid-owner "$CUID" -o lo -j ACCEPT
+delete_rule ip6tables -m owner --uid-owner "$CUID" ! -o lo -j REJECT
+delete_rule ip6tables -m owner --uid-owner "$CUID" -o lo -j ACCEPT

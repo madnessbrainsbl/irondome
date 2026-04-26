@@ -1,0 +1,14 @@
+[Unit]
+Description=Iron Dome transparent strict route
+After=iron-ss-outline.service
+Requires=iron-ss-outline.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/libexec/iron-transparent-generate
+ExecStart=/usr/bin/sing-box run -c /run/iron-dome/sing-box.json
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
