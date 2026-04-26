@@ -1,4 +1,6 @@
 # irondome
+<img width="762" height="472" alt="iron" src="https://github.com/user-attachments/assets/fbb9a75a-d8bd-4de4-b126-49bf0f0f6edf" />
+
 
 Terminal CLI for layered anonymity: chains Tor through Shadowsocks/Outline proxies with transparent routing and systemd service management. Reusable core with optional integrations — no secrets, no GUI, no runtime state.
 
