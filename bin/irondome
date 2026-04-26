@@ -1,0 +1,64 @@
+#!/bin/bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LIB_DIR="$ROOT_DIR/lib"
+
+# shellcheck source=/dev/null
+. "$LIB_DIR/common.sh"
+
+COMMAND="${1:-help}"
+shift || true
+
+if [[ "$COMMAND" != "help" && "$COMMAND" != "-h" && "$COMMAND" != "--help" ]]; then
+  irondome_banner
+  irondome_notice
+fi
+
+case "$COMMAND" in
+  help|-h|--help)
+    irondome_help
+    ;;
+  setup)
+    "$LIB_DIR/setup.sh" "$@"
+    ;;
+  install)
+    "$LIB_DIR/install.sh" "$@"
+    ;;
+  start)
+    "$LIB_DIR/start.sh" "$@"
+    ;;
+  stop)
+    "$LIB_DIR/stop.sh" "$@"
+    ;;
+  open)
+    "$LIB_DIR/open.sh" "$@"
+    ;;
+  status)
+    "$LIB_DIR/status.sh" "$@"
+    ;;
+  doctor)
+    "$LIB_DIR/doctor.sh" "$@"
+    ;;
+  bridges)
+    "$LIB_DIR/bridges.sh" "$@"
+    ;;
+  outline)
+    "$LIB_DIR/outline.sh" "$@"
+    ;;
+  render)
+    "$LIB_DIR/render.sh" "$@"
+    ;;
+  backup)
+    "$LIB_DIR/backup.sh" "$@"
+    ;;
+  restore)
+    "$LIB_DIR/restore.sh" "$@"
+    ;;
+  *)
+    echo "Unknown command: $COMMAND" >&2
+    echo >&2
+    irondome_help >&2
+    exit 1
+    ;;
+esac

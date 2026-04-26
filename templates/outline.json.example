@@ -1,0 +1,9 @@
+{
+  "server": "__OUTLINE_SERVER__",
+  "server_port": __OUTLINE_PORT__,
+  "password": "__OUTLINE_PASSWORD__",
+  "method": "__OUTLINE_METHOD__",
+  "local_address": "127.0.0.1",
+  "local_port": 1080,
+  "timeout": 300
+}

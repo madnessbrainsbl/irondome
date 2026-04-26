@@ -1,0 +1,13 @@
+[Unit]
+Description=Iron Dome boot cleanup
+DefaultDependencies=no
+After=local-fs.target
+Before=network-pre.target NetworkManager.service
+Wants=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/libexec/iron-dome-cleanup
+
+[Install]
+WantedBy=multi-user.target

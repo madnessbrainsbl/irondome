@@ -1,0 +1,17 @@
+[Unit]
+Description=unproxy local API gateway
+After=iron-ss-outline.service
+Requires=iron-ss-outline.service
+
+[Service]
+Type=simple
+User=cliproxysvc
+Group=cliproxysvc
+WorkingDirectory=__CLIPROXY_WORKDIR__
+ExecStart=__CLIPROXY_BIN__ -config __INSTALL_ROOT__/integrations/unproxy/local-gateway.yaml
+ExecStartPost=/bin/sh -lc 'sleep 2; touch /var/lib/unproxy/auth/*.json 2>/dev/null || true'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

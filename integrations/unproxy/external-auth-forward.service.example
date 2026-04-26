@@ -1,0 +1,26 @@
+[Unit]
+Description=unproxy external auth/API loopback forward
+After=iron-ss-outline.service network-online.target
+Requires=iron-ss-outline.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/libexec/iron-hosts-apply
+ExecStartPre=/bin/sh -lc 'for i in 2 3 4 5 6 7 8; do ip addr add 127.0.0.$i/32 dev lo 2>/dev/null || true; done'
+ExecStart=/bin/sh -lc '\
+  socat TCP4-LISTEN:443,bind=127.0.0.2,reuseaddr,fork SOCKS5-CONNECT:127.0.0.1:1080:daily-cloudcode-pa.googleapis.com:443 & \
+  socat TCP4-LISTEN:443,bind=127.0.0.3,reuseaddr,fork SOCKS5-CONNECT:127.0.0.1:1080:play.googleapis.com:443 & \
+  socat TCP4-LISTEN:443,bind=127.0.0.4,reuseaddr,fork SOCKS5-CONNECT:127.0.0.1:1080:oauth2.googleapis.com:443 & \
+  socat TCP4-LISTEN:443,bind=127.0.0.5,reuseaddr,fork SOCKS5-CONNECT:127.0.0.1:1080:accounts.google.com:443 & \
+  socat TCP4-LISTEN:443,bind=127.0.0.6,reuseaddr,fork SOCKS5-CONNECT:127.0.0.1:1080:www.googleapis.com:443 & \
+  socat TCP4-LISTEN:443,bind=127.0.0.7,reuseaddr,fork SOCKS5-CONNECT:127.0.0.1:1080:cloudcode-pa.googleapis.com:443 & \
+  socat TCP4-LISTEN:443,bind=127.0.0.8,reuseaddr,fork SOCKS5-CONNECT:127.0.0.1:1080:daily-cloudcode-pa.sandbox.googleapis.com:443 & \
+  wait'
+ExecStopPost=/usr/local/libexec/iron-hosts-clear
+ExecStopPost=/bin/sh -lc 'for i in 2 3 4 5 6 7 8; do ip addr del 127.0.0.$i/32 dev lo 2>/dev/null || true; done'
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

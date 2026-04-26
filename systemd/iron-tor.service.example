@@ -1,0 +1,16 @@
+[Unit]
+Description=Iron Dome Tor over obfs4 bridges
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debian-tor
+Group=debian-tor
+ExecStart=/usr/bin/tor -f __INSTALL_ROOT__/config/torrc.strict
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
