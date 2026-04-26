@@ -1,6 +1,3 @@
-<p align="center">
-  <img src=".github/assets/irondome.png" alt="irondome" width="620">
-</p>
 
 <h3 align="center">Layered anonymity CLI for Tor → Outline/Shadowsocks routing</h3>
 
