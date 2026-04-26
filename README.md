@@ -1,71 +1,85 @@
-# madnessbrains
+# irondome
 
-This directory is a staging area for the future GitHub version.
+Terminal CLI for layered anonymity: chains Tor through Shadowsocks/Outline proxies with transparent routing and systemd service management. Reusable core with optional integrations — no secrets, no GUI, no runtime state.
 
-It is not a direct export of the live machine.
-It contains safe templates and CLI scaffolding that can be turned into a public repository without exposing runtime state, secrets, or machine-specific paths.
+## How it works
 
-## Product Direction
+Traffic flows through a multi-hop chain so no single node sees both your real IP and your destination:
 
-The public version is being shaped as:
-
-- a terminal-only interactive CLI
-- a reusable anonymity core
-- optional integrations on top of that core
-
-The core should not depend on any app-specific integration.
-`unproxy` is treated as an optional local gateway profile.
-
-That means:
-
-- the core must stay usable without `unproxy`
-- integration-specific files must live under `integrations/`
-- the setup wizard must support a `core-only` profile
-
-## Included So Far
-
-- `bin/` — terminal CLI entrypoint
-- `lib/` — command implementations and helpers
-- `templates/` — core config templates
-- `systemd/` — service templates
-- `scripts/` — helper examples
-- `docs/` — architecture and setup notes
-- `integrations/` — optional integration examples
-- `PUBLISHING_TODO.md` — remaining cleanup list before publication
-
-## CLI Status
-
-Current CLI entrypoint:
-
-```bash
-./bin/irondome --help
+```
+App → transparent strict route (optional) → SOCKS5 (127.0.0.1:1080) → Tor (127.0.0.1:9050) → Outline server → Internet
 ```
 
-Currently working:
+- **Tor** hides your origin from the Outline server
+- **Outline/Shadowsocks** hides the Tor exit from the destination
+- **Strict mode** blocks any traffic that tries to bypass the chain
 
-- English help output
-- interactive `setup`
-- `bridges`
-- `outline`
-- `status`
-- `render`
-- `install --root <path>`
-- basic `doctor`
+### Modes
 
-Still incomplete:
+| Mode       | Description                                                             |
+| ---------- | ----------------------------------------------------------------------- |
+| **Open**   | Stack is up, direct egress still allowed — useful for diagnostics       |
+| **Strict** | Transparent route active, bypass rejected — fail-closed for web traffic |
 
-- full production-grade installer/apply flow
-- richer doctor checks and troubleshooting output
+## Quick start
 
-## Intentionally Excluded
+```bash
+./bin/irondome setup        # interactive configuration wizard
+./bin/irondome bridges      # manage Tor bridges
+./bin/irondome outline      # set Outline/Shadowsocks key
+./bin/irondome render       # generate config files from templates
+./bin/irondome install --root /opt/irondome   # install generated files
+./bin/irondome start        # start all services
+./bin/irondome status       # check chain health
+./bin/irondome doctor       # diagnose common issues
+./bin/irondome stop         # stop all services
+```
 
-- real auth files
-- real `ss://` keys
-- runtime files from `/run`
-- cookies / keyring / local GUI state
-- frozen backup copies from `work/`
-- live system-specific paths and secrets
+## Prerequisites
 
-## Status
+Required:
 
-This is a staging product skeleton, not the final public release.
+- `tor`, `obfs4proxy`, `torsocks`
+- `shadowsocks-libev` or `sing-box`
+- `iptables` / `ip6tables`
+
+Optional:
+
+- `privoxy` — local HTTP proxy
+- `cliproxy`, `socat` — gateway integrations
+
+You need to provide:
+
+1. A working `ss://` Outline/Shadowsocks key
+2. A list of Tor bridges
+
+## Project structure
+
+```
+bin/irondome          CLI entrypoint
+lib/                  command implementations
+templates/            config templates (torrc, outline, privoxy)
+systemd/              service unit templates
+scripts/              helper script examples
+docs/                 architecture, setup, integrations
+integrations/         optional integration examples (unproxy, etc.)
+state/                runtime state (env, keys, bridges)
+generated/            rendered output from templates
+```
+
+## Integrations
+
+The core is self-contained. Integrations are optional layers on top:
+
+- `integrations/unproxy/` — local API gateway example
+- Future: browser profiles, curl/git configs, LLM gateway
+
+## Documentation
+
+- [Architecture](docs/ARCHITECTURE.md) — chain layout and modes
+- [Setup](docs/SETUP.md) — prerequisites and recommended flow
+- [Integrations](docs/INTEGRATIONS.md) — optional layers
+
+## License
+
+MIT
