@@ -213,6 +213,24 @@ sudo ss-key 'ss://...'
 It writes the Outline config, restarts `iron-ss-outline.service`, checks
 `127.0.0.1:1080`, prints GeoIP/ASN details, and rolls back if `1080` stays dead.
 
+The generated `tor-bridges` helper does the same for bridges:
+
+```bash
+sudo tor-bridges 'obfs4 198.51.100.7:9443 <FINGERPRINT> cert=<CERT> iat-mode=0'
+sudo tor-bridges            # no argument: paste lines, empty line ends input
+```
+
+It rewrites the `UseBridges` / `ClientTransportPlugin` / `Bridge` block in the
+installed `torrc.strict`, restarts `iron-tor.service`, waits for bootstrap
+against `check.torproject.org`, then restarts `iron-ss-outline.service` (which
+reaches the Outline server through Tor) and verifies `1080`. If either check
+fails it restores the previous bridge list. It also writes the new bridges back
+to `state/bridges.txt`, so the next `render` does not reinstall the old ones.
+
+`obfs4` and `snowflake` get their `ClientTransportPlugin` line generated; any
+other transport is accepted with a warning and needs its plugin line added by
+hand.
+
 ### Backup and restore
 
 ```bash

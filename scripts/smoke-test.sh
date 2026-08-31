@@ -60,7 +60,7 @@ echo "=== render ==="
 
 for f in config/torrc.strict config/outline.json config/privoxy.conf \
          bin/iron-dome-start bin/iron-dome-stop bin/iron-dome-open \
-         bin/iron-windows-proxy bin/ss-key \
+         bin/iron-windows-proxy bin/ss-key bin/tor-bridges \
          libexec/iron-transparent-generate libexec/iron-dome-lock-apply \
          libexec/iron-dome-lock-clear libexec/iron-dome-cleanup \
          systemd/iron-tor.service systemd/iron-ss-outline.service \
@@ -82,7 +82,10 @@ grep -q 'CLIENT_NET="${IRON_WINDOWS_PROXY_NET:-192.168.98.0/24}"' "$REPO/generat
   && grep -q 'range=${CLIENT_NET}' "$REPO/generated/bin/iron-windows-proxy" \
   && echo "OK       host proxy restricted to WINDOWS_PROXY_NET" \
   || { echo "FAIL     host proxy accepts any source"; fail=1; }
-grep -q '__PROJECT_ROOT__\|__INSTALL_ROOT__\|__CLIPROXY' -r "$REPO/generated" \
+grep -q 'TORRC="${IRON_TORRC:-/opt/irondome/config/torrc.strict}"' "$REPO/generated/bin/tor-bridges" \
+  && echo "OK       tor-bridges points at the installed torrc" \
+  || { echo "FAIL     tor-bridges torrc path not substituted"; fail=1; }
+grep -q '__PROJECT_ROOT__\|__INSTALL_ROOT__\|__CLIPROXY\|__TORRC__\|__STATE_BRIDGES__\|__OUTLINE_CONFIG__' -r "$REPO/generated" \
   && { echo "FAIL     unsubstituted placeholder in generated output"; fail=1; } \
   || echo "OK       no unsubstituted placeholders"
 

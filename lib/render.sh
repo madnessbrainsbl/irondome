@@ -856,6 +856,18 @@ dst.write_text(src.replace('__OUTLINE_CONFIG__', outline_config))
 PY
 chmod 0755 "$GENERATED_DIR/bin/ss-key"
 
+python3 - "$ROOT_DIR/scripts/tor-bridges.example.sh" "$GENERATED_DIR/bin/tor-bridges" \
+  "$INSTALL_PREFIX/config/torrc.strict" "$BRIDGES_FILE" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1]).read_text()
+dst = Path(sys.argv[2])
+src = src.replace('__TORRC__', sys.argv[3]).replace('__STATE_BRIDGES__', sys.argv[4])
+dst.write_text(src)
+PY
+chmod 0755 "$GENERATED_DIR/bin/tor-bridges"
+
 if [[ "$INTEGRATION_PROFILE" == "unproxy" ]]; then
   mkdir -p "$GENERATED_DIR/integrations/unproxy"
 
@@ -1022,6 +1034,7 @@ Generated files:
 - $GENERATED_DIR/bin/iron-dome-open
 - $GENERATED_DIR/bin/iron-windows-proxy
 - $GENERATED_DIR/bin/ss-key
+- $GENERATED_DIR/bin/tor-bridges
 - $GENERATED_DIR/libexec/iron-transparent-generate
 - $GENERATED_DIR/libexec/iron-dome-lock-apply
 - $GENERATED_DIR/libexec/iron-dome-lock-clear

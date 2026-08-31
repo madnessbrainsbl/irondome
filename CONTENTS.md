@@ -32,8 +32,8 @@
 ## scripts/
 
 - `smoke-test.sh` — render + dry-run install + assertions, no root needed
-- `tor-bridges.example.sh`
-- `ss-key.example.sh`
+- `tor-bridges.example.sh` — rendered into `bin/tor-bridges`, installed as `sudo tor-bridges`
+- `ss-key.example.sh` — rendered into `bin/ss-key`, installed as `sudo ss-key`
 - `check-ss-key-health.example.sh`
 - `smart-antigravity.example.sh`
 - `iron-dome-start.example.sh`
