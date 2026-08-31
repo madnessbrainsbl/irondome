@@ -65,10 +65,33 @@ handles leftover rules, not pre-start traffic.
 network is enforced by `socat range=`, but anyone on that network can use your
 tunnel. Keep it on a host-only network.
 
+**Anything running as the protected user.** `install` writes
+`/etc/sudoers.d/iron-dome` granting that user passwordless root for four
+commands, so the shield is usable without typing a password every time. The
+trade is real: any process running as you can call `sudo ss-key 'ss://...'`
+and silently repoint the whole chain at a server of its choosing, with no
+prompt and no log you would notice. It can equally run `sudo iron-dome-stop`.
+If that matters more to you than convenience, delete the `NOPASSWD:` lines and
+keep only the `Defaults secure_path=` line — everything still works, sudo just
+asks for your password.
+
+That same file sets `secure_path` for **all** sudo usage on the machine, not
+just these four commands. It has to: sudo resolves the command against the
+global `secure_path` before it matches a per-command rule, and Debian's default
+omits `/usr/local/bin`. The change is additive — it prepends
+`/usr/local/sbin:/usr/local/bin` — but it is a system-wide edit made by an
+installer, and you should know it happened.
+
 ## Known weak points in this implementation
 
 - The lock is `iptables` OUTPUT-based plus policy routing. It is UID-scoped;
   a process running as another user is not covered.
+- `iron-dome-start` applies the lock before it starts Tor, so a failed start —
+  dead bridges, a dead Outline key, a service that will not come up — leaves
+  the protected user blocked rather than on a direct route. It also means a
+  failed boot leaves you with no network for that user until you run
+  `sudo iron-dome-stop`. That is the intended trade; if you would rather have
+  connectivity than the guarantee, start with `sudo iron-dome-open`.
 - IPv6 is disabled rather than routed. Verify with `curl -6` that it actually
   fails.
 - DNS goes through the transparent route in strict mode. In `open` mode it does

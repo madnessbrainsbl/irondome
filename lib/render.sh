@@ -17,7 +17,7 @@ require_state_file "$BRIDGES_FILE" "Bridges are missing. Run: irondome setup (or
 require_state_file "$OUTLINE_KEY_FILE" "Outline key is missing. Run: irondome setup (or just: irondome outline 'ss://...')"
 
 rm -rf "$GENERATED_DIR"
-mkdir -p "$GENERATED_DIR/systemd" "$GENERATED_DIR/bin" "$GENERATED_DIR/libexec" "$GENERATED_DIR/config"
+mkdir -p "$GENERATED_DIR/systemd" "$GENERATED_DIR/bin" "$GENERATED_DIR/libexec" "$GENERATED_DIR/config" "$GENERATED_DIR/etc/sudoers.d"
 
 cp "$TEMPLATES_DIR/torrc.strict.example" "$GENERATED_DIR/config/torrc.strict"
 while IFS= read -r bridge; do
@@ -477,6 +477,43 @@ systemctl stop iron-dome-lock.service iron-transparent.service iron-ss-outline.s
 EOF
 chmod 0755 "$GENERATED_DIR/libexec/iron-dome-cleanup"
 
+cat > "$GENERATED_DIR/libexec/iron-ss-outline-start" <<EOF
+#!/bin/bash
+set -euo pipefail
+
+SOURCE_CONFIG="$INSTALL_PREFIX/config/outline.json"
+RESOLVED_CONFIG="/tmp/iron-outline-resolved-\$(id -u).json"
+
+umask 077
+
+python3 - "\$SOURCE_CONFIG" "\$RESOLVED_CONFIG" <<'PY'
+import ipaddress
+import json
+import socket
+import sys
+from pathlib import Path
+
+src = Path(sys.argv[1])
+dst = Path(sys.argv[2])
+cfg = json.loads(src.read_text())
+host = str(cfg.get("server", "")).strip()
+
+try:
+    ipaddress.ip_address(host)
+except ValueError:
+    try:
+        infos = socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM)
+        cfg["server"] = infos[0][4][0]
+    except socket.gaierror:
+        pass
+
+dst.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\\n")
+PY
+
+exec /usr/bin/torsocks /usr/bin/ss-local -c "\$RESOLVED_CONFIG"
+EOF
+chmod 0755 "$GENERATED_DIR/libexec/iron-ss-outline-start"
+
 if [[ "$INTEGRATION_PROFILE" == "unproxy" ]]; then
   cat >> "$GENERATED_DIR/libexec/iron-dome-cleanup" <<'EOF'
 systemctl stop iron-cliproxy.service iron-google-forward.service google-forward 2>/dev/null || true
@@ -486,6 +523,15 @@ for i in 2 3 4 5 6 7 8; do
 done
 EOF
 fi
+
+cat > "$GENERATED_DIR/etc/sudoers.d/iron-dome" <<EOF
+Defaults secure_path=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+$PROTECTED_USER ALL=(root) NOPASSWD: /usr/local/bin/iron-dome-start
+$PROTECTED_USER ALL=(root) NOPASSWD: /usr/local/bin/iron-dome-stop
+$PROTECTED_USER ALL=(root) NOPASSWD: /usr/local/bin/tor-bridges
+$PROTECTED_USER ALL=(root) NOPASSWD: /usr/local/bin/ss-key
+EOF
+chmod 0440 "$GENERATED_DIR/etc/sudoers.d/iron-dome"
 
 cat > "$GENERATED_DIR/bin/iron-dome-start" <<EOF
 #!/bin/bash
@@ -559,12 +605,32 @@ fi
 
 cat >> "$GENERATED_DIR/bin/iron-dome-start" <<'EOF'
 
+# The lock goes on before the chain comes up, not after. Every wait below can
+# fail вЂ” dead bridges, dead Outline key, a service that will not start вЂ” and
+# without this the protected user would sit on a direct route while we retry,
+# and stay there after a failed start. Table 2022 is empty until sing-box fills
+# it, so locking early means "no route", not "wrong route".
+fail_closed() {
+  echo " FAIL"
+  echo "[IRON DOME] $1" >&2
+  if [[ "$LOCK_MODE" == "strict" ]]; then
+    echo "[IRON DOME] the lock stays applied: protected traffic is blocked, not leaking." >&2
+    echo "[IRON DOME] run 'sudo iron-dome-stop' to restore normal networking." >&2
+  fi
+  exit 1
+}
+
+if [[ "$LOCK_MODE" == "strict" ]]; then
+  echo "[IRON DOME] applying lock before starting the chain"
+  systemctl restart iron-dome-lock.service
+fi
+
 echo "[IRON DOME] starting Tor with bridges"
 systemctl restart iron-tor.service
 echo -n "[IRON DOME] waiting for Tor"
 for i in $(seq 1 90); do
   if curl --socks5-hostname 127.0.0.1:9050 -s --max-time 10 https://check.torproject.org/api/ip >/dev/null; then echo " OK"; break; fi
-  if [[ "$i" -eq 90 ]]; then echo " FAIL"; exit 1; fi
+  if [[ "$i" -eq 90 ]]; then fail_closed "Tor did not bootstrap; check your bridges with: sudo tor-bridges"; fi
   echo -n "."; sleep 2
 done
 
@@ -573,7 +639,7 @@ systemctl restart iron-ss-outline.service
 echo -n "[IRON DOME] waiting for 1080"
 for i in $(seq 1 30); do
   if curl --socks5-hostname 127.0.0.1:1080 -s --max-time 10 https://api.ipify.org >/dev/null; then echo " OK"; break; fi
-  if [[ "$i" -eq 30 ]]; then echo " FAIL"; exit 1; fi
+  if [[ "$i" -eq 30 ]]; then fail_closed "no egress on 1080; the Outline key is probably dead: sudo ss-key <ss://key>"; fi
   echo -n "."; sleep 2
 done
 EOF
@@ -586,7 +652,7 @@ systemctl restart iron-privoxy.service
 echo -n "[IRON DOME] waiting for 8119"
 for i in $(seq 1 20); do
   if curl -x http://127.0.0.1:8119 -s --max-time 5 https://api.ipify.org >/dev/null 2>&1; then echo " OK"; break; fi
-  if [[ "$i" -eq 20 ]]; then echo " FAIL"; exit 1; fi
+  if [[ "$i" -eq 20 ]]; then fail_closed "privoxy is not answering on 8119"; fi
   echo -n "."; sleep 2
 done
 EOF
@@ -604,57 +670,14 @@ fi
 EOF
 fi
 
-if [[ "$INTEGRATION_PROFILE" == "unproxy" ]]; then
-  cat >> "$GENERATED_DIR/bin/iron-dome-start" <<'EOF'
-echo "[IRON DOME] starting integration endpoints"
-if antigravity_direct_mode; then
-  echo "[IRON DOME] Antigravity direct mode; stopping Google forwarder"
-  systemctl stop iron-google-forward.service 2>/dev/null || true
-  systemctl disable iron-google-forward.service 2>/dev/null || true
-  if ! clear_google_hosts; then
-    echo "[IRON DOME] warning: failed to clear Google hosts redirect"
-  fi
-else
-  systemctl restart iron-google-forward.service
-fi
-if ! /usr/local/libexec/iron-unproxy-refresh; then
-  echo "[IRON DOME] integration auth refresh failed, continuing with existing auth state"
-fi
-systemctl restart iron-cliproxy.service
-MODELS_READY=no
-for attempt in 1 2; do
-  if [[ "$attempt" -gt 1 ]]; then
-    echo "[IRON DOME] restarting gateway after empty model registry"
-    systemctl restart iron-cliproxy.service
-  fi
-  echo -n "[IRON DOME] waiting for gateway models"
-  for i in $(seq 1 35); do
-    MODELS_COUNT="$(curl --noproxy '*' -s --max-time 5 http://127.0.0.1:8317/v1/models 2>/dev/null | python3 -c 'import json,sys
-try:
-    print(len(json.load(sys.stdin).get("data", [])))
-except Exception:
-    raise SystemExit(1)')" || true
-    if [[ -n "$MODELS_COUNT" && "$MODELS_COUNT" -gt 0 ]]; then echo " OK"; MODELS_READY=yes; break 2; fi
-    echo -n "."; sleep 2
-  done
-  echo " FAIL"
-done
-if [[ "$MODELS_READY" != "yes" ]]; then exit 1; fi
-EOF
-else
-  cat >> "$GENERATED_DIR/bin/iron-dome-start" <<'EOF'
-MODELS_COUNT="disabled"
-EOF
-fi
-
 cat >> "$GENERATED_DIR/bin/iron-dome-start" <<EOF
 
 wait_strict_ready() {
   echo -n "[IRON DOME] waiting for strict route"
-  for i in \$(seq 1 15); do
+  for i in \$(seq 1 8); do
     if ip route get 1.1.1.1 uid "\$CHECK_UID" 2>/dev/null | grep -q 'dev iron0' \
-      && curl --socks5-hostname 127.0.0.1:1080 -s --connect-timeout 8 --max-time 20 https://ifconfig.me >/dev/null 2>&1 \
-      && curl -x http://127.0.0.1:8119 -s --connect-timeout 8 --max-time 20 https://ifconfig.me >/dev/null 2>&1; then
+      && curl --socks5-hostname 127.0.0.1:1080 -s --connect-timeout 3 --max-time 8 https://api.ipify.org >/dev/null 2>&1 \
+      && curl -x http://127.0.0.1:8119 -s --connect-timeout 3 --max-time 8 https://api.ipify.org >/dev/null 2>&1; then
       echo " OK"; return 0
     fi
     echo -n "."; sleep 2
@@ -686,6 +709,52 @@ for s in iron-tor.service iron-ss-outline.service iron-transparent.service iron-
   printf "%-24s %s\n" "\$s" "\$(systemctl is-active "\$s" 2>/dev/null || true)"
 done
 EOF
+
+if [[ "$INTEGRATION_PROFILE" == "unproxy" ]]; then
+  cat >> "$GENERATED_DIR/bin/iron-dome-start" <<'EOF'
+echo "[IRON DOME] starting integration endpoints"
+if antigravity_direct_mode; then
+  echo "[IRON DOME] Antigravity direct mode; stopping Google forwarder"
+  systemctl stop iron-google-forward.service 2>/dev/null || true
+  systemctl disable iron-google-forward.service 2>/dev/null || true
+  if ! clear_google_hosts; then
+    echo "[IRON DOME] warning: failed to clear Google hosts redirect"
+  fi
+else
+  systemctl restart iron-google-forward.service
+fi
+if ! /usr/local/libexec/iron-unproxy-refresh; then
+  echo "[IRON DOME] integration auth refresh failed, continuing with existing auth state"
+fi
+systemctl restart iron-cliproxy.service
+MODELS_COUNT="failed"
+for attempt in 1 2; do
+  if [[ "$attempt" -gt 1 ]]; then
+    echo "[IRON DOME] restarting gateway after empty model registry"
+    systemctl restart iron-cliproxy.service
+  fi
+  echo -n "[IRON DOME] waiting for gateway models"
+  for i in $(seq 1 35); do
+    MODELS_COUNT="$(curl --noproxy '*' -s --max-time 5 http://127.0.0.1:8317/v1/models 2>/dev/null | python3 -c 'import json,sys
+try:
+    print(len(json.load(sys.stdin).get("data", [])))
+except Exception:
+    raise SystemExit(1)')" || true
+    if [[ -n "$MODELS_COUNT" && "$MODELS_COUNT" -gt 0 ]]; then echo " OK"; break 2; fi
+    echo -n "."; sleep 2
+  done
+  echo " FAIL"
+done
+if [[ -z "$MODELS_COUNT" || "$MODELS_COUNT" == "failed" ]]; then
+  MODELS_COUNT="failed"
+  echo "[IRON DOME] WARNING: gateway models are not ready (shield stays active)"
+fi
+EOF
+else
+  cat >> "$GENERATED_DIR/bin/iron-dome-start" <<'EOF'
+MODELS_COUNT="disabled"
+EOF
+fi
 
 if [[ "$ENABLE_LOCAL_HTTP_PROXY" == "yes" || "$INTEGRATION_PROFILE" == "unproxy" ]]; then
   cat >> "$GENERATED_DIR/bin/iron-dome-start" <<'EOF'
@@ -1027,6 +1096,8 @@ Generated files:
 - $GENERATED_DIR/libexec/iron-dome-lock-apply
 - $GENERATED_DIR/libexec/iron-dome-lock-clear
 - $GENERATED_DIR/libexec/iron-dome-cleanup
+- $GENERATED_DIR/libexec/iron-ss-outline-start
+- $GENERATED_DIR/etc/sudoers.d/iron-dome
 - $GENERATED_DIR/systemd/*.service
 EOF
 

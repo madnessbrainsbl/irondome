@@ -1,9 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-if command -v iron-dome-start >/dev/null 2>&1; then
-  exec sudo iron-dome-start "$@"
-else
-  echo "iron-dome-start is not installed on this system." >&2
-  exit 1
+if [[ -x /usr/local/bin/iron-dome-start ]]; then
+  exec sudo /usr/local/bin/iron-dome-start "$@"
 fi
+echo "iron-dome-start is not installed. Run: irondome setup && irondome render && sudo irondome install" >&2
+exit 1

@@ -92,6 +92,55 @@ grep -q '__PROJECT_ROOT__\|__INSTALL_ROOT__\|__CLIPROXY\|__TORRC__\|__STATE_BRID
   && { echo "FAIL     unsubstituted placeholder in generated output"; fail=1; } \
   || echo "OK       no unsubstituted placeholders"
 
+# The lock must be applied before any optional gateway check, in the generator
+# itself — the gateway block only renders for the unproxy profile, so checking
+# the rendered script under profile "none" would prove nothing. Reversing these
+# made a stuck gateway exit 1 with the machine still wide open.
+lock_line="$(grep -n 'systemctl restart iron-dome-lock.service' "$REPO/lib/render.sh" | head -1 | cut -d: -f1 || true)"
+gw_line="$(grep -n 'waiting for gateway models' "$REPO/lib/render.sh" | head -1 | cut -d: -f1 || true)"
+if [[ -z "$gw_line" || -z "$lock_line" ]]; then
+  echo "FAIL     could not locate the lock/gateway blocks in render.sh"; fail=1
+elif [[ "$lock_line" -lt "$gw_line" ]]; then
+  echo "OK       lock is emitted before the gateway check"
+else
+  echo "FAIL     gateway check runs before the lock (fail-open on a stuck gateway)"; fail=1
+fi
+grep -A 4 'waiting for gateway models' "$REPO/lib/render.sh" | grep -q 'exit 1' \
+  && { echo "FAIL     gateway check still exits 1"; fail=1; } \
+  || echo "OK       gateway check only warns"
+
+# Every wait in the start script can fail; none of them may leave a direct route.
+early_lock="$(grep -n 'applying lock before starting the chain' "$REPO/generated/bin/iron-dome-start" | head -1 | cut -d: -f1 || true)"
+tor_wait="$(grep -n 'waiting for Tor' "$REPO/generated/bin/iron-dome-start" | head -1 | cut -d: -f1 || true)"
+if [[ -n "$early_lock" && -n "$tor_wait" && "$early_lock" -lt "$tor_wait" ]]; then
+  echo "OK       lock applied before the chain starts"
+else
+  echo "FAIL     chain starts before the lock (a failed start leaves a direct route)"; fail=1
+fi
+grep -qE '^\s+if \[\[ "\$i" -eq [0-9]+ \]\]; then echo " FAIL"; exit 1; fi' "$REPO/generated/bin/iron-dome-start" \
+  && { echo "FAIL     a wait loop still bails with a bare exit 1"; fail=1; } \
+  || echo "OK       failed waits go through fail_closed"
+# systemd refuses Type=oneshot units that set Restart= to anything but "no".
+boot_unit="$REPO/systemd/iron-dome-boot.service.example"
+if [[ -f "$boot_unit" ]] && grep -q '^Type=oneshot' "$boot_unit" \
+   && grep -qE '^Restart=' "$boot_unit" && ! grep -qE '^Restart=no$' "$boot_unit"; then
+  echo "FAIL     boot unit sets Restart= on a Type=oneshot service (systemd refuses to load it)"; fail=1
+else
+  echo "OK       boot unit has no illegal Restart= directive"
+fi
+
+if [[ -f "$REPO/generated/etc/sudoers.d/iron-dome" ]]; then
+  if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "$REPO/generated/etc/sudoers.d/iron-dome" >/dev/null \
+      && echo "OK       generated sudoers passes visudo" \
+      || { echo "FAIL     generated sudoers is invalid"; fail=1; }
+  else
+    grep -q '^smoke ALL=(root) NOPASSWD: /usr/local/bin/ss-key$' "$REPO/generated/etc/sudoers.d/iron-dome" \
+      && echo "SKIP     visudo unavailable; sudoers names the protected user" \
+      || { echo "FAIL     generated sudoers has unexpected content"; fail=1; }
+  fi
+fi
+
 echo
 echo "=== install --root ==="
 "$REPO/bin/irondome" install --root "$WORK/target" >/dev/null

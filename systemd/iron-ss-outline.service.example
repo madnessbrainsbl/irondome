@@ -7,7 +7,8 @@ Requires=iron-tor.service
 Type=simple
 User=cliproxysvc
 Group=cliproxysvc
-ExecStart=/usr/bin/torsocks /usr/bin/ss-local -c __INSTALL_ROOT__/config/outline.json
+ExecStartPre=-+/usr/sbin/setcap -r /usr/bin/ss-local
+ExecStart=/usr/local/libexec/iron-ss-outline-start
 Restart=always
 RestartSec=5
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=Iron Dome boot autostart
+After=network-online.target iron-dome-cleanup.service
+Wants=network-online.target
+Before=multi-user.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# No Restart= here: systemd refuses to load a Type=oneshot unit that sets
+# Restart= to anything but "no" ("Refusing", ENOEXEC). iron-dome-start already
+# retries each link internally, up to 3 minutes for the Tor bootstrap.
+TimeoutStartSec=600
+ExecStart=/usr/local/bin/iron-dome-start
+
+[Install]
+WantedBy=multi-user.target

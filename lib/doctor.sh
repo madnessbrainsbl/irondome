@@ -62,3 +62,24 @@ if [[ "$INTEGRATION_PROFILE" == "unproxy" ]]; then
     echo "GATEWAY 8317: FAILED"
   fi
 fi
+
+echo
+echo "=== LOCK ==="
+if ip route get 1.1.1.1 uid "$(id -u)" 2>/dev/null | grep -q 'dev iron0'; then
+  echo "ROUTE iron0: OK"
+else
+  echo "ROUTE iron0: FAILED"
+fi
+
+DIRECT_IF="$(ip -4 route show default 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i=="dev") {print $(i+1); exit}}')"
+if [[ -n "$DIRECT_IF" ]] && curl --interface "$DIRECT_IF" -s --connect-timeout 2 --max-time 3 https://api.ipify.org >/dev/null 2>&1; then
+  echo "DIRECT EGRESS: LEAK"
+else
+  echo "DIRECT EGRESS: BLOCKED"
+fi
+
+if curl -6 -s --connect-timeout 2 --max-time 3 https://api64.ipify.org >/dev/null 2>&1; then
+  echo "IPv6: LEAK"
+else
+  echo "IPv6: BLOCKED"
+fi

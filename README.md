@@ -142,6 +142,24 @@ Shadowsocks password in cleartext to `generated/config/outline.json`. Both
 directories are gitignored and the files are created `0600`. Do not commit them
 and do not copy them into issue reports.
 
+`install` touches three things outside the install prefix, and you should know
+about all three before running it:
+
+- `/etc/systemd/system/` — the unit files, plus `iron-dome-boot.service`, which
+  is enabled so the shield comes back after a reboot.
+- `/etc/sudoers.d/iron-dome` — passwordless root for `iron-dome-start`,
+  `iron-dome-stop`, `ss-key` and `tor-bridges`, and a `Defaults secure_path=`
+  line that applies to **all** sudo on the machine (Debian's default omits
+  `/usr/local/bin`, so `sudo ss-key` would otherwise be "command not found").
+  See [Threat Model](docs/THREAT_MODEL.md) for what that grant costs and how to
+  drop it.
+- `/usr/bin/ss-local` — its `cap_net_bind_service` capability is removed.
+  `torsocks` refuses to run privileged binaries, and recent
+  `shadowsocks-libev` packages ship that capability set.
+
+Use `install --root /tmp/...` first if you want to read the generated files
+before any of that happens.
+
 ## Dry run
 
 Render and install into a temporary root without touching the live system:

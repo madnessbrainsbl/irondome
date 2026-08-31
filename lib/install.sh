@@ -110,10 +110,32 @@ if [[ -d "$GENERATED_DIR/integrations" ]]; then
   done
 fi
 
+SUDOERS_DIR="$(prefix_path /etc/sudoers.d)"
+if [[ -f "$GENERATED_DIR/etc/sudoers.d/iron-dome" ]]; then
+  # Validate before copying: a malformed file under /etc/sudoers.d breaks sudo
+  # system-wide, and you need sudo to remove it again.
+  if command -v visudo >/dev/null 2>&1; then
+    visudo -cf "$GENERATED_DIR/etc/sudoers.d/iron-dome" >/dev/null || {
+      echo "Generated sudoers file is invalid; not installing it." >&2
+      exit 1
+    }
+  fi
+  install -d -m 0755 "$SUDOERS_DIR"
+  install -m 0440 "$GENERATED_DIR/etc/sudoers.d/iron-dome" "$SUDOERS_DIR/iron-dome"
+fi
+
 if [[ "$TARGET_ROOT" == "/" ]]; then
+  if command -v setcap >/dev/null 2>&1 && [[ -x /usr/bin/ss-local ]]; then
+    setcap -r /usr/bin/ss-local 2>/dev/null || true
+  fi
   systemctl daemon-reload
   if [[ "$ENABLE_BOOT_CLEANUP" == "yes" && -f "$SYSTEMD_DIR/iron-dome-cleanup.service" ]]; then
     systemctl enable iron-dome-cleanup.service || true
+  fi
+  if [[ -f "$SYSTEMD_DIR/iron-dome-boot.service" ]]; then
+    # A refused unit (bad directive) must not pass silently: it is the autostart.
+    systemctl enable iron-dome-boot.service \
+      || echo "WARNING: iron-dome-boot.service was not enabled; the shield will not come up on boot" >&2
   fi
 fi
 
@@ -130,4 +152,5 @@ Installed:
   $LIBEXEC_DIR/*
   $SYSTEMD_DIR/*.service
   $CONFIG_DIR/*
+  $SUDOERS_DIR/iron-dome
 EOF
