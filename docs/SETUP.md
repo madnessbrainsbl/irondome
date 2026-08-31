@@ -14,8 +14,10 @@ Required components:
 Optional components:
 
 - `privoxy`
-- `cliproxy`
 - `socat`
+- a local API gateway binary (only for the `unproxy` integration profile)
+
+`socat` is required when `WINDOWS_PROXY_ENABLED=yes` because `iron-windows-proxy` forwards the host-facing listener to `127.0.0.1:8119`.
 
 ## Required Inputs
 
@@ -28,6 +30,11 @@ Optional integration inputs:
 
 3. A local API gateway binary path.
 4. A valid gateway auth state.
+
+`setup` stores both inputs under `state/` with mode `0600`. `state/` and
+`generated/` are gitignored — they hold your live key. See
+[THREAT_MODEL.md](THREAT_MODEL.md) for what the resulting chain does and does
+not cover.
 
 ## Files to Customize
 
@@ -48,4 +55,5 @@ Optional integration templates live under `integrations/`.
 6. Verify `1080`.
 7. Optionally start local helper proxies/gateways.
 8. Verify their loopback endpoints if enabled.
-9. Enable strict routing only after the full chain is healthy.
+9. If exposing the host proxy, verify `127.0.0.1:18119` from Kali and `KALI_VM_IP:18119` from Windows.
+10. Enable strict routing only after the full chain is healthy.

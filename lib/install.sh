@@ -26,7 +26,7 @@ check_core_dependencies() {
     check_dependency privoxy
   fi
 
-  if [[ "$INTEGRATION_PROFILE" == "unproxy" ]]; then
+  if [[ "$INTEGRATION_PROFILE" == "unproxy" || "$WINDOWS_PROXY_ENABLED" == "yes" ]]; then
     check_dependency socat
   fi
 }
@@ -59,11 +59,16 @@ fi
 
 install -d -m 0755 "$BIN_DIR" "$LIBEXEC_DIR" "$SYSTEMD_DIR" "$CONFIG_DIR" "$INTEGRATIONS_DIR"
 
-if [[ "$TARGET_ROOT" == "/" && "$INTEGRATION_PROFILE" == "unproxy" ]]; then
+# iron-ss-outline.service runs as cliproxysvc in every profile, so the account
+# has to exist even when no integration profile is selected.
+if [[ "$TARGET_ROOT" == "/" ]]; then
   id cliproxysvc >/dev/null 2>&1 || useradd --system --home /var/lib/cliproxy --shell /usr/sbin/nologin cliproxysvc
-  install -d -m 0755 /var/lib/cliproxy
-  install -d -m 0755 /var/lib/cliproxy/auth
-  chown -R cliproxysvc:cliproxysvc /var/lib/cliproxy
+
+  if [[ "$INTEGRATION_PROFILE" == "unproxy" ]]; then
+    install -d -m 0755 /var/lib/cliproxy
+    install -d -m 0755 /var/lib/cliproxy/auth
+    chown -R cliproxysvc:cliproxysvc /var/lib/cliproxy
+  fi
 fi
 
 for file in "$GENERATED_DIR/bin"/*; do
@@ -83,7 +88,18 @@ done
 
 for file in "$GENERATED_DIR/config"/*; do
   [[ -f "$file" ]] || continue
-  install -m 0644 "$file" "$CONFIG_DIR/$(basename "$file")"
+  name="$(basename "$file")"
+  # outline.json holds the Shadowsocks password in cleartext; only the service
+  # account that runs ss-local may read it.
+  if [[ "$name" == "outline.json" ]]; then
+    if [[ "$TARGET_ROOT" == "/" ]] && id cliproxysvc >/dev/null 2>&1; then
+      install -m 0640 -g cliproxysvc "$file" "$CONFIG_DIR/$name"
+    else
+      install -m 0600 "$file" "$CONFIG_DIR/$name"
+    fi
+  else
+    install -m 0644 "$file" "$CONFIG_DIR/$name"
+  fi
 done
 
 if [[ -d "$GENERATED_DIR/integrations" ]]; then

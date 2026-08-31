@@ -1,0 +1,4 @@
+# core.autocrlf=true on Windows would hand Linux clones scripts with CR line
+# endings, which fail as `bad interpreter: /bin/bash^M`. Force LF.
+* text=auto eol=lf
+*.png binary

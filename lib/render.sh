@@ -8,6 +8,11 @@ LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 load_config
 ensure_dirs
 
+if [[ "$WINDOWS_PROXY_ENABLED" == "yes" && "$ENABLE_LOCAL_HTTP_PROXY" != "yes" && "$INTEGRATION_PROFILE" != "unproxy" ]]; then
+  echo "Windows/host proxy requires the local HTTP proxy layer. Enable ENABLE_LOCAL_HTTP_PROXY or use the unproxy profile." >&2
+  exit 1
+fi
+
 require_state_file "$BRIDGES_FILE" "Bridges file is missing. Run: irondome bridges"
 require_state_file "$OUTLINE_KEY_FILE" "Outline key is missing. Run: irondome outline"
 
@@ -114,13 +119,46 @@ set -euo pipefail
 KUID="\$(id -u $PROTECTED_USER)"
 CUID="\$(id -u cliproxysvc)"
 PUID="\$(id -u privoxy)"
-OUTLINE_IP="\$(python3 - <<'PY'
+BYPASS_GROUP="\${IRON_ANTIGRAVITY_BYPASS_GROUP:-antigravity-direct}"
+BYPASS_ENABLED="\${IRON_ANTIGRAVITY_STRICT_BYPASS:-no}"
+BYPASS_GID="\$(getent group "\$BYPASS_GROUP" | cut -d: -f3 || true)"
+WINDOWS_PROXY_ENABLED="$WINDOWS_PROXY_ENABLED"
+WINDOWS_PROXY_BIND="${WINDOWS_PROXY_BIND}"
+WINDOWS_PROXY_PORT="${WINDOWS_PROXY_PORT}"
+WINDOWS_PROXY_NET="${WINDOWS_PROXY_NET}"
+WINDOWS_PROXY_PRIORITY="999"
+OUTLINE_HOST="\$(python3 - <<'PY'
 import json
 from pathlib import Path
 cfg=json.loads(Path('$INSTALL_PREFIX/config/outline.json').read_text())
 print(cfg['server'])
 PY
 )"
+resolve_outline_ip() {
+  python3 - "\$OUTLINE_HOST" <<'PY'
+import ipaddress
+import socket
+import sys
+
+host = sys.argv[1].strip()
+try:
+    ipaddress.ip_address(host)
+    print(host)
+    raise SystemExit(0)
+except ValueError:
+    pass
+
+seen = []
+for info in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM):
+    ip = info[4][0]
+    if ip not in seen:
+        seen.append(ip)
+if not seen:
+    raise SystemExit(1)
+print(seen[0])
+PY
+}
+OUTLINE_IP="\$(resolve_outline_ip || true)"
 OUTLINE_PORT="\$(python3 - <<'PY'
 import json
 from pathlib import Path
@@ -128,9 +166,18 @@ cfg=json.loads(Path('$INSTALL_PREFIX/config/outline.json').read_text())
 print(cfg['server_port'])
 PY
 )"
+if [[ -z "\$OUTLINE_IP" ]]; then
+  echo "Failed to resolve Outline host: \$OUTLINE_HOST" >&2
+  exit 1
+fi
 TRANSPARENT_MARK_A="0x2023/0xffffffff"
 TRANSPARENT_MARK_B="0x2024/0xffffffff"
 INCLUDE_ROOT_WEB="$INCLUDE_ROOT_WEB"
+ROUTE_TABLE="2022"
+BYPASS_PRIORITY="900"
+USER_ROUTE_PRIORITY="1000"
+ROOT_ROUTE_PRIORITY="1001"
+DIRECT_IFACE="\$(ip -4 route show default | awk '{for (i=1; i<=NF; i++) if (\$i==\"dev\") {print \$(i+1); exit}}')"
 
 delete_rule() {
   local tool="\$1"; shift
@@ -140,6 +187,46 @@ delete_rule() {
 delete_mangle_rule() {
   local tool="\$1"; shift
   while "\$tool" -t mangle -C OUTPUT "\$@" 2>/dev/null; do "\$tool" -t mangle -D OUTPUT "\$@"; done
+}
+
+delete_ip_rule() {
+  while ip -4 rule del "\$@" 2>/dev/null; do true; done
+}
+
+insert_uid_routes() {
+  # Policy routing closes forced-interface and unmarked OUTPUT bypasses.
+  # The bypass mark stays earlier so sing-box can avoid routing loops.
+  delete_ip_rule priority "\$WINDOWS_PROXY_PRIORITY" to "\$WINDOWS_PROXY_NET" lookup main
+  delete_ip_rule priority "\$BYPASS_PRIORITY" fwmark 0x2024 goto 9002
+  delete_ip_rule priority "\$USER_ROUTE_PRIORITY" uidrange "\$KUID-\$KUID" lookup "\$ROUTE_TABLE"
+  if [[ "\$INCLUDE_ROOT_WEB" == "yes" ]]; then
+    delete_ip_rule priority "\$ROOT_ROUTE_PRIORITY" uidrange 0-0 lookup "\$ROUTE_TABLE"
+  fi
+  if [[ "\$WINDOWS_PROXY_ENABLED" == "yes" ]]; then
+    # Allow replies from the host-OS proxy listener to return through the VM/LAN interface.
+    # The filter rules below still only permit traffic from the configured proxy port.
+    ip -4 rule add priority "\$WINDOWS_PROXY_PRIORITY" to "\$WINDOWS_PROXY_NET" lookup main
+  fi
+  ip -4 rule add priority "\$BYPASS_PRIORITY" fwmark 0x2024 goto 9002
+  ip -4 rule add priority "\$USER_ROUTE_PRIORITY" uidrange "\$KUID-\$KUID" lookup "\$ROUTE_TABLE"
+  if [[ "\$INCLUDE_ROOT_WEB" == "yes" ]]; then
+    ip -4 rule add priority "\$ROOT_ROUTE_PRIORITY" uidrange 0-0 lookup "\$ROUTE_TABLE"
+  fi
+}
+
+delete_antigravity_bypass() {
+  [[ -n "\$BYPASS_GID" ]] || return 0
+  delete_mangle_rule iptables -m owner --gid-owner "\$BYPASS_GID" ! -o lo -j MARK --set-xmark "\$TRANSPARENT_MARK_B"
+  delete_mangle_rule iptables -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
+  delete_rule iptables -m owner --gid-owner "\$BYPASS_GID" -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
+}
+
+insert_antigravity_bypass() {
+  delete_antigravity_bypass
+  [[ "\$BYPASS_ENABLED" == "yes" && -n "\$BYPASS_GID" ]] || return 0
+  iptables -t mangle -I OUTPUT 1 -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
+  iptables -t mangle -I OUTPUT 1 -m owner --gid-owner "\$BYPASS_GID" ! -o lo -j MARK --set-xmark "\$TRANSPARENT_MARK_B"
+  iptables -I OUTPUT 1 -m owner --gid-owner "\$BYPASS_GID" -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
 }
 
 insert_pair() {
@@ -152,29 +239,47 @@ insert_pair() {
 
 insert_user_ipv4() {
   local uid="\$1"
+  if [[ "\$WINDOWS_PROXY_ENABLED" == "yes" && ( "\$uid" == "\$KUID" || "\$uid" == "0" ) ]]; then
+    delete_rule iptables -m owner --uid-owner "\$uid" -p tcp --sport "\$WINDOWS_PROXY_PORT" -d "\$WINDOWS_PROXY_NET" -j ACCEPT
+  fi
   delete_mangle_rule iptables -m owner --uid-owner "\$uid" ! -o lo -j MARK --set-xmark "\$TRANSPARENT_MARK_A"
+  if [[ -n "\$DIRECT_IFACE" ]]; then
+    delete_rule iptables -m owner --uid-owner "\$uid" -o "\$DIRECT_IFACE" -m mark --mark "\$TRANSPARENT_MARK_A" -j REJECT
+  fi
+  delete_rule iptables -m owner --uid-owner "\$uid" -o iron0 -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
   delete_rule iptables -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
   delete_rule iptables -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
   delete_rule iptables -m owner --uid-owner "\$uid" ! -o lo -j REJECT
   delete_rule iptables -m owner --uid-owner "\$uid" -o lo -j ACCEPT
   iptables -t mangle -I OUTPUT 1 -m owner --uid-owner "\$uid" ! -o lo -j MARK --set-xmark "\$TRANSPARENT_MARK_A"
   iptables -I OUTPUT 1 -m owner --uid-owner "\$uid" ! -o lo -j REJECT
-  iptables -I OUTPUT 1 -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
   iptables -I OUTPUT 1 -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
+  if [[ -n "\$DIRECT_IFACE" ]]; then
+    iptables -I OUTPUT 1 -m owner --uid-owner "\$uid" -o "\$DIRECT_IFACE" -m mark --mark "\$TRANSPARENT_MARK_A" -j REJECT
+  fi
+  if [[ "\$WINDOWS_PROXY_ENABLED" == "yes" && ( "\$uid" == "\$KUID" || "\$uid" == "0" ) ]]; then
+    iptables -I OUTPUT 1 -m owner --uid-owner "\$uid" -p tcp --sport "\$WINDOWS_PROXY_PORT" -d "\$WINDOWS_PROXY_NET" -j ACCEPT
+  fi
   iptables -I OUTPUT 1 -m owner --uid-owner "\$uid" -o lo -j ACCEPT
 }
 
 insert_user_ipv6() {
   local uid="\$1"
   delete_mangle_rule ip6tables -m owner --uid-owner "\$uid" ! -o lo -j MARK --set-xmark "\$TRANSPARENT_MARK_A"
+  if [[ -n "\$DIRECT_IFACE" ]]; then
+    delete_rule ip6tables -m owner --uid-owner "\$uid" -o "\$DIRECT_IFACE" -m mark --mark "\$TRANSPARENT_MARK_A" -j REJECT
+  fi
+  delete_rule ip6tables -m owner --uid-owner "\$uid" -o iron0 -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
   delete_rule ip6tables -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
   delete_rule ip6tables -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
   delete_rule ip6tables -m owner --uid-owner "\$uid" ! -o lo -j REJECT
   delete_rule ip6tables -m owner --uid-owner "\$uid" -o lo -j ACCEPT
   ip6tables -t mangle -I OUTPUT 1 -m owner --uid-owner "\$uid" ! -o lo -j MARK --set-xmark "\$TRANSPARENT_MARK_A"
   ip6tables -I OUTPUT 1 -m owner --uid-owner "\$uid" ! -o lo -j REJECT
-  ip6tables -I OUTPUT 1 -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
   ip6tables -I OUTPUT 1 -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
+  if [[ -n "\$DIRECT_IFACE" ]]; then
+    ip6tables -I OUTPUT 1 -m owner --uid-owner "\$uid" -o "\$DIRECT_IFACE" -m mark --mark "\$TRANSPARENT_MARK_A" -j REJECT
+  fi
   ip6tables -I OUTPUT 1 -m owner --uid-owner "\$uid" -o lo -j ACCEPT
 }
 
@@ -204,6 +309,8 @@ if [[ "\$INCLUDE_ROOT_WEB" == "yes" ]]; then
 fi
 insert_cliproxy_ipv4
 insert_cliproxy_ipv6
+insert_antigravity_bypass
+insert_uid_routes
 EOF
 chmod 0755 "$GENERATED_DIR/libexec/iron-dome-lock-apply"
 
@@ -214,13 +321,44 @@ set -euo pipefail
 KUID="\$(id -u $PROTECTED_USER)"
 CUID="\$(id -u cliproxysvc)"
 PUID="\$(id -u privoxy)"
-OUTLINE_IP="\$(python3 - <<'PY'
+BYPASS_GROUP="\${IRON_ANTIGRAVITY_BYPASS_GROUP:-antigravity-direct}"
+BYPASS_GID="\$(getent group "\$BYPASS_GROUP" | cut -d: -f3 || true)"
+WINDOWS_PROXY_ENABLED="$WINDOWS_PROXY_ENABLED"
+WINDOWS_PROXY_PORT="${WINDOWS_PROXY_PORT}"
+WINDOWS_PROXY_NET="${WINDOWS_PROXY_NET}"
+WINDOWS_PROXY_PRIORITY="999"
+OUTLINE_HOST="\$(python3 - <<'PY'
 import json
 from pathlib import Path
 cfg=json.loads(Path('$INSTALL_PREFIX/config/outline.json').read_text())
 print(cfg['server'])
 PY
 )"
+resolve_outline_ip() {
+  python3 - "\$OUTLINE_HOST" <<'PY'
+import ipaddress
+import socket
+import sys
+
+host = sys.argv[1].strip()
+try:
+    ipaddress.ip_address(host)
+    print(host)
+    raise SystemExit(0)
+except ValueError:
+    pass
+
+seen = []
+for info in socket.getaddrinfo(host, None, socket.AF_INET, socket.SOCK_STREAM):
+    ip = info[4][0]
+    if ip not in seen:
+        seen.append(ip)
+if not seen:
+    raise SystemExit(1)
+print(seen[0])
+PY
+}
+OUTLINE_IP="\$(resolve_outline_ip || true)"
 OUTLINE_PORT="\$(python3 - <<'PY'
 import json
 from pathlib import Path
@@ -231,6 +369,11 @@ PY
 TRANSPARENT_MARK_A="0x2023/0xffffffff"
 TRANSPARENT_MARK_B="0x2024/0xffffffff"
 INCLUDE_ROOT_WEB="$INCLUDE_ROOT_WEB"
+ROUTE_TABLE="2022"
+BYPASS_PRIORITY="900"
+USER_ROUTE_PRIORITY="1000"
+ROOT_ROUTE_PRIORITY="1001"
+DIRECT_IFACE="\$(ip -4 route show default | awk '{for (i=1; i<=NF; i++) if (\$i==\"dev\") {print \$(i+1); exit}}')"
 
 delete_rule() {
   local tool="\$1"; shift
@@ -242,6 +385,25 @@ delete_mangle_rule() {
   while "\$tool" -t mangle -C OUTPUT "\$@" 2>/dev/null; do "\$tool" -t mangle -D OUTPUT "\$@"; done
 }
 
+delete_ip_rule() {
+  while ip -4 rule del "\$@" 2>/dev/null; do true; done
+}
+
+delete_uid_routes() {
+  delete_ip_rule priority "\$WINDOWS_PROXY_PRIORITY" to "\$WINDOWS_PROXY_NET" lookup main
+  delete_ip_rule priority "\$BYPASS_PRIORITY" fwmark 0x2024 goto 9002
+  delete_ip_rule priority "\$USER_ROUTE_PRIORITY" uidrange "\$KUID-\$KUID" lookup "\$ROUTE_TABLE"
+  delete_ip_rule priority "\$ROOT_ROUTE_PRIORITY" uidrange 0-0 lookup "\$ROUTE_TABLE"
+}
+
+delete_uid_routes
+
+if [[ -n "\$BYPASS_GID" ]]; then
+  delete_mangle_rule iptables -m owner --gid-owner "\$BYPASS_GID" ! -o lo -j MARK --set-xmark "\$TRANSPARENT_MARK_B"
+  delete_mangle_rule iptables -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
+  delete_rule iptables -m owner --gid-owner "\$BYPASS_GID" -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
+fi
+
 for tool in iptables ip6tables; do
   delete_rule "\$tool" -m owner --uid-owner "\$PUID" ! -o lo -j REJECT
   delete_rule "\$tool" -m owner --uid-owner "\$PUID" -o lo -j ACCEPT
@@ -249,11 +411,22 @@ done
 
 for uid in "\$KUID"; do
   delete_mangle_rule iptables -m owner --uid-owner "\$uid" ! -o lo -j MARK --set-xmark "\$TRANSPARENT_MARK_A"
+  if [[ "\$WINDOWS_PROXY_ENABLED" == "yes" ]]; then
+    delete_rule iptables -m owner --uid-owner "\$uid" -p tcp --sport "\$WINDOWS_PROXY_PORT" -d "\$WINDOWS_PROXY_NET" -j ACCEPT
+  fi
+  if [[ -n "\$DIRECT_IFACE" ]]; then
+    delete_rule iptables -m owner --uid-owner "\$uid" -o "\$DIRECT_IFACE" -m mark --mark "\$TRANSPARENT_MARK_A" -j REJECT
+  fi
+  delete_rule iptables -m owner --uid-owner "\$uid" -o iron0 -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
   delete_rule iptables -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
   delete_rule iptables -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
   delete_rule iptables -m owner --uid-owner "\$uid" ! -o lo -j REJECT
   delete_rule iptables -m owner --uid-owner "\$uid" -o lo -j ACCEPT
   delete_mangle_rule ip6tables -m owner --uid-owner "\$uid" ! -o lo -j MARK --set-xmark "\$TRANSPARENT_MARK_A"
+  if [[ -n "\$DIRECT_IFACE" ]]; then
+    delete_rule ip6tables -m owner --uid-owner "\$uid" -o "\$DIRECT_IFACE" -m mark --mark "\$TRANSPARENT_MARK_A" -j REJECT
+  fi
+  delete_rule ip6tables -m owner --uid-owner "\$uid" -o iron0 -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
   delete_rule ip6tables -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
   delete_rule ip6tables -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
   delete_rule ip6tables -m owner --uid-owner "\$uid" ! -o lo -j REJECT
@@ -263,11 +436,22 @@ done
 if [[ "\$INCLUDE_ROOT_WEB" == "yes" ]]; then
   for uid in 0; do
     delete_mangle_rule iptables -m owner --uid-owner "\$uid" ! -o lo -j MARK --set-xmark "\$TRANSPARENT_MARK_A"
+    if [[ "\$WINDOWS_PROXY_ENABLED" == "yes" ]]; then
+      delete_rule iptables -m owner --uid-owner "\$uid" -p tcp --sport "\$WINDOWS_PROXY_PORT" -d "\$WINDOWS_PROXY_NET" -j ACCEPT
+    fi
+    if [[ -n "\$DIRECT_IFACE" ]]; then
+      delete_rule iptables -m owner --uid-owner "\$uid" -o "\$DIRECT_IFACE" -m mark --mark "\$TRANSPARENT_MARK_A" -j REJECT
+    fi
+    delete_rule iptables -m owner --uid-owner "\$uid" -o iron0 -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
     delete_rule iptables -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
     delete_rule iptables -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
     delete_rule iptables -m owner --uid-owner "\$uid" ! -o lo -j REJECT
     delete_rule iptables -m owner --uid-owner "\$uid" -o lo -j ACCEPT
     delete_mangle_rule ip6tables -m owner --uid-owner "\$uid" ! -o lo -j MARK --set-xmark "\$TRANSPARENT_MARK_A"
+    if [[ -n "\$DIRECT_IFACE" ]]; then
+      delete_rule ip6tables -m owner --uid-owner "\$uid" -o "\$DIRECT_IFACE" -m mark --mark "\$TRANSPARENT_MARK_A" -j REJECT
+    fi
+    delete_rule ip6tables -m owner --uid-owner "\$uid" -o iron0 -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
     delete_rule ip6tables -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_A" -j ACCEPT
     delete_rule ip6tables -m owner --uid-owner "\$uid" -m mark --mark "\$TRANSPARENT_MARK_B" -j ACCEPT
     delete_rule ip6tables -m owner --uid-owner "\$uid" ! -o lo -j REJECT
@@ -275,7 +459,9 @@ if [[ "\$INCLUDE_ROOT_WEB" == "yes" ]]; then
   done
 fi
 
-delete_rule iptables -m owner --uid-owner "\$CUID" -d "\$OUTLINE_IP" -p tcp --dport "\$OUTLINE_PORT" -j ACCEPT
+if [[ -n "\$OUTLINE_IP" ]]; then
+  delete_rule iptables -m owner --uid-owner "\$CUID" -d "\$OUTLINE_IP" -p tcp --dport "\$OUTLINE_PORT" -j ACCEPT
+fi
 delete_rule iptables -m owner --uid-owner "\$CUID" ! -o lo -j REJECT
 delete_rule iptables -m owner --uid-owner "\$CUID" -o lo -j ACCEPT
 delete_rule ip6tables -m owner --uid-owner "\$CUID" ! -o lo -j REJECT
@@ -306,30 +492,68 @@ cat > "$GENERATED_DIR/bin/iron-dome-start" <<EOF
 set -euo pipefail
 
 LOCK_MODE="strict"
+CHECK_USER="$PROTECTED_USER"
+CHECK_UID="\$(id -u "\$CHECK_USER")"
 if [[ "\${1:-}" == "--no-lock" ]]; then
   LOCK_MODE="open"
 fi
 
-probe_user_network() {
-  runuser -u "$PROTECTED_USER" -- sh -lc "curl -k -s --max-time 8 https://1.1.1.1 >/dev/null 2>&1 && curl -s --max-time 8 https://example.com >/dev/null 2>&1"
+probe_direct_network() {
+  runuser -u "\$CHECK_USER" -- sh -lc 'curl -k -s --connect-timeout 10 --max-time 20 https://1.1.1.1 >/dev/null 2>&1'
+}
+
+probe_strict_user_network() {
+  runuser -u "\$CHECK_USER" -- sh -lc '
+    direct_if="\$(ip -4 route show default | awk '\''{for (i=1; i<=NF; i++) if (\$i=="dev") {print \$(i+1); exit}}'\'')"
+    ip route get 1.1.1.1 uid '"\$CHECK_UID"' 2>/dev/null | grep -q "dev iron0" &&
+    curl -k -s --connect-timeout 10 --max-time 20 https://1.1.1.1 >/dev/null 2>&1 &&
+    { [ -z "\$direct_if" ] || ! curl -s --interface "\$direct_if" --connect-timeout 2 --max-time 3 https://ifconfig.me >/dev/null 2>&1; }
+  '
 }
 
 print_status() {
   local label="\$1"
   local cmd="\$2"
   printf "%-20s " "\$label"
-  if eval "\$cmd" >/dev/null 2>&1; then echo OK; else echo FAILED; fi
+  if eval "\$cmd" >/dev/null 2>&1 || { sleep 3; eval "\$cmd" >/dev/null 2>&1; }; then echo OK; else echo FAILED; fi
+}
+
+wait_systemd_jobs() {
+  local label="\$1"
+  echo -n "[IRON DOME] waiting for \$label"
+  for i in \$(seq 1 45); do
+    if [ -z "\$(systemctl list-jobs --no-legend 2>/dev/null)" ]; then echo " OK"; return 0; fi
+    echo -n "."; sleep 1
+  done
+  echo " WARN"
+  systemctl list-jobs --no-pager || true
 }
 
 echo "[IRON DOME] reloading units"
 systemctl daemon-reload
+wait_systemd_jobs "pending jobs"
 echo "[IRON DOME] stopping legacy units"
 systemctl stop iron-transparent.service iron-dome-lock.service iron-ss-outline.service iron-tor.service iron-privoxy.service 2>/dev/null || true
+wait_systemd_jobs "legacy stops"
 EOF
 
 if [[ "$INTEGRATION_PROFILE" == "unproxy" ]]; then
   cat >> "$GENERATED_DIR/bin/iron-dome-start" <<'EOF'
 systemctl stop iron-google-forward.service iron-cliproxy.service google-forward 2>/dev/null || true
+
+ANTIGRAVITY_PROXY_ENV="/home/$CHECK_USER/.config/iron-dome/antigravity-proxy.env"
+
+antigravity_direct_mode() {
+  [ -f "$ANTIGRAVITY_PROXY_ENV" ] \
+    && grep -Eq '^[[:space:]]*IRON_ANTIGRAVITY_PROXY=[[:space:]]*$' "$ANTIGRAVITY_PROXY_ENV" \
+    && grep -Eq '^[[:space:]]*IRON_ANTIGRAVITY_EXPORT_PROXY_ENV=no[[:space:]]*$' "$ANTIGRAVITY_PROXY_ENV"
+}
+
+clear_google_hosts() {
+  if [ -x /usr/local/libexec/iron-hosts-clear ]; then
+    /usr/local/libexec/iron-hosts-clear
+  fi
+}
 EOF
 fi
 
@@ -338,9 +562,9 @@ cat >> "$GENERATED_DIR/bin/iron-dome-start" <<'EOF'
 echo "[IRON DOME] starting Tor with bridges"
 systemctl restart iron-tor.service
 echo -n "[IRON DOME] waiting for Tor"
-for i in $(seq 1 45); do
+for i in $(seq 1 90); do
   if curl --socks5-hostname 127.0.0.1:9050 -s --max-time 10 https://check.torproject.org/api/ip >/dev/null; then echo " OK"; break; fi
-  if [[ "$i" -eq 45 ]]; then echo " FAIL"; exit 1; fi
+  if [[ "$i" -eq 90 ]]; then echo " FAIL"; exit 1; fi
   echo -n "."; sleep 2
 done
 
@@ -368,25 +592,54 @@ done
 EOF
 fi
 
+if [[ "$WINDOWS_PROXY_ENABLED" == "yes" ]]; then
+  cat >> "$GENERATED_DIR/bin/iron-dome-start" <<'EOF'
+
+echo "[IRON DOME] starting Windows host proxy"
+if command -v iron-windows-proxy >/dev/null 2>&1; then
+  iron-windows-proxy start || true
+else
+  "$(dirname "$0")/iron-windows-proxy" start || true
+fi
+EOF
+fi
+
 if [[ "$INTEGRATION_PROFILE" == "unproxy" ]]; then
   cat >> "$GENERATED_DIR/bin/iron-dome-start" <<'EOF'
 echo "[IRON DOME] starting integration endpoints"
-systemctl restart iron-google-forward.service
+if antigravity_direct_mode; then
+  echo "[IRON DOME] Antigravity direct mode; stopping Google forwarder"
+  systemctl stop iron-google-forward.service 2>/dev/null || true
+  systemctl disable iron-google-forward.service 2>/dev/null || true
+  if ! clear_google_hosts; then
+    echo "[IRON DOME] warning: failed to clear Google hosts redirect"
+  fi
+else
+  systemctl restart iron-google-forward.service
+fi
 if ! /usr/local/libexec/iron-unproxy-refresh; then
   echo "[IRON DOME] integration auth refresh failed, continuing with existing auth state"
 fi
 systemctl restart iron-cliproxy.service
-echo -n "[IRON DOME] waiting for gateway models"
-for i in $(seq 1 35); do
-  MODELS_COUNT="$(curl --noproxy '*' -s --max-time 5 http://127.0.0.1:8317/v1/models 2>/dev/null | python3 -c 'import json,sys
+MODELS_READY=no
+for attempt in 1 2; do
+  if [[ "$attempt" -gt 1 ]]; then
+    echo "[IRON DOME] restarting gateway after empty model registry"
+    systemctl restart iron-cliproxy.service
+  fi
+  echo -n "[IRON DOME] waiting for gateway models"
+  for i in $(seq 1 35); do
+    MODELS_COUNT="$(curl --noproxy '*' -s --max-time 5 http://127.0.0.1:8317/v1/models 2>/dev/null | python3 -c 'import json,sys
 try:
     print(len(json.load(sys.stdin).get("data", [])))
 except Exception:
     raise SystemExit(1)')" || true
-  if [[ -n "$MODELS_COUNT" && "$MODELS_COUNT" -gt 0 ]]; then echo " OK"; break; fi
-  if [[ "$i" -eq 35 ]]; then echo " FAIL"; exit 1; fi
-  echo -n "."; sleep 2
+    if [[ -n "$MODELS_COUNT" && "$MODELS_COUNT" -gt 0 ]]; then echo " OK"; MODELS_READY=yes; break 2; fi
+    echo -n "."; sleep 2
+  done
+  echo " FAIL"
 done
+if [[ "$MODELS_READY" != "yes" ]]; then exit 1; fi
 EOF
 else
   cat >> "$GENERATED_DIR/bin/iron-dome-start" <<'EOF'
@@ -396,10 +649,32 @@ fi
 
 cat >> "$GENERATED_DIR/bin/iron-dome-start" <<EOF
 
+wait_strict_ready() {
+  echo -n "[IRON DOME] waiting for strict route"
+  for i in \$(seq 1 15); do
+    if ip route get 1.1.1.1 uid "\$CHECK_UID" 2>/dev/null | grep -q 'dev iron0' \
+      && curl --socks5-hostname 127.0.0.1:1080 -s --connect-timeout 8 --max-time 20 https://ifconfig.me >/dev/null 2>&1 \
+      && curl -x http://127.0.0.1:8119 -s --connect-timeout 8 --max-time 20 https://ifconfig.me >/dev/null 2>&1; then
+      echo " OK"; return 0
+    fi
+    echo -n "."; sleep 2
+  done
+  echo " WARN"
+  echo "[IRON DOME] strict diagnostics:"
+  ip -4 rule show || true
+  ip route get 1.1.1.1 uid "\$CHECK_UID" || true
+  systemctl is-active iron-ss-outline.service iron-privoxy.service iron-transparent.service iron-dome-lock.service || true
+  return 1
+}
+EOF
+
+cat >> "$GENERATED_DIR/bin/iron-dome-start" <<EOF
+
 if [[ "\$LOCK_MODE" == "strict" ]]; then
   echo "[IRON DOME] starting transparent route"
   systemctl restart iron-transparent.service
   systemctl restart iron-dome-lock.service
+  wait_strict_ready || true
 else
   systemctl stop iron-transparent.service 2>/dev/null || true
   systemctl stop iron-dome-lock.service 2>/dev/null || true
@@ -453,13 +728,13 @@ cat >> "$GENERATED_DIR/bin/iron-dome-start" <<EOF
 
 echo
 if [[ "\$LOCK_MODE" == "strict" ]]; then
-  echo "=== USER NETWORK ($PROTECTED_USER) ==="
+  echo "=== USER NETWORK (\$CHECK_USER) ==="
   printf "NETWORK:            "
-  if probe_user_network; then echo OK; else echo FAILED; fi
+  if probe_strict_user_network || probe_strict_user_network; then echo OK; else echo FAILED; fi
 else
   echo "=== DIRECT EGRESS ($PROTECTED_USER) ==="
   printf "DIRECT:             "
-  if probe_user_network; then echo OPEN; else echo BLOCKED; fi
+  if probe_direct_network; then echo OPEN; else echo BLOCKED; fi
 fi
 
 echo
@@ -476,11 +751,16 @@ cat > "$GENERATED_DIR/bin/iron-dome-stop" <<EOF
 set -euo pipefail
 
 probe_user_network() {
-  runuser -u "$PROTECTED_USER" -- sh -lc "curl -k -s --max-time 8 https://1.1.1.1 >/dev/null 2>&1 && curl -s --max-time 8 https://example.com >/dev/null 2>&1"
+  runuser -u "$PROTECTED_USER" -- sh -lc 'curl -k -s --connect-timeout 10 --max-time 20 https://1.1.1.1 >/dev/null 2>&1'
 }
 
 echo "[IRON DOME] stopping strict stack"
 systemctl stop iron-dome-lock.service iron-transparent.service iron-ss-outline.service iron-tor.service iron-privoxy.service 2>/dev/null || true
+if command -v iron-windows-proxy >/dev/null 2>&1; then
+  iron-windows-proxy stop || true
+elif [[ -x "\$(dirname "\$0")/iron-windows-proxy" ]]; then
+  "\$(dirname "\$0")/iron-windows-proxy" stop || true
+fi
 EOF
 
 if [[ "$INTEGRATION_PROFILE" == "unproxy" ]]; then
@@ -524,6 +804,57 @@ set -euo pipefail
 exec /usr/local/bin/iron-dome-start --no-lock
 EOF
 chmod 0755 "$GENERATED_DIR/bin/iron-dome-open"
+
+cat > "$GENERATED_DIR/bin/iron-windows-proxy" <<EOF
+#!/bin/bash
+set -euo pipefail
+
+LISTEN_BIND="\${IRON_WINDOWS_PROXY_BIND:-$WINDOWS_PROXY_BIND}"
+LISTEN_PORT="\${IRON_WINDOWS_PROXY_PORT:-$WINDOWS_PROXY_PORT}"
+UPSTREAM_HOST="\${IRON_WINDOWS_PROXY_UPSTREAM_HOST:-127.0.0.1}"
+UPSTREAM_PORT="\${IRON_WINDOWS_PROXY_UPSTREAM_PORT:-8119}"
+LOG_FILE="\${IRON_WINDOWS_PROXY_LOG:-/tmp/iron-windows-proxy.log}"
+ACTION="\${1:-start}"
+# range= keeps this from being an open proxy into the Tor -> Outline chain:
+# without it any host that can reach the listener can use the tunnel.
+CLIENT_NET="\${IRON_WINDOWS_PROXY_NET:-$WINDOWS_PROXY_NET}"
+LISTEN_SPEC="TCP-LISTEN:\${LISTEN_PORT},bind=\${LISTEN_BIND},reuseaddr,fork,range=\${CLIENT_NET}"
+PATTERN="socat \${LISTEN_SPEC} TCP:\${UPSTREAM_HOST}:\${UPSTREAM_PORT}"
+
+case "\$ACTION" in
+  start)
+    if pgrep -f "\$PATTERN" >/dev/null 2>&1; then
+      echo "Windows host proxy already listening on \${LISTEN_BIND}:\${LISTEN_PORT}"
+      exit 0
+    fi
+    mkdir -p "\$(dirname "\$LOG_FILE")"
+    nohup socat "\$LISTEN_SPEC" "TCP:\${UPSTREAM_HOST}:\${UPSTREAM_PORT}" >"\$LOG_FILE" 2>&1 &
+    echo "Windows host proxy: \${LISTEN_BIND}:\${LISTEN_PORT} -> \${UPSTREAM_HOST}:\${UPSTREAM_PORT} (clients: \${CLIENT_NET})"
+    ;;
+  stop)
+    pkill -f "\$PATTERN" 2>/dev/null || true
+    ;;
+  status)
+    ss -ltn "sport = :\${LISTEN_PORT}" || true
+    ;;
+  *)
+    echo "Usage: iron-windows-proxy [start|stop|status]" >&2
+    exit 2
+    ;;
+esac
+EOF
+chmod 0755 "$GENERATED_DIR/bin/iron-windows-proxy"
+
+python3 - "$ROOT_DIR/scripts/ss-key.example.sh" "$GENERATED_DIR/bin/ss-key" "$INSTALL_PREFIX/config/outline.json" <<'PY'
+from pathlib import Path
+import sys
+
+src = Path(sys.argv[1]).read_text()
+dst = Path(sys.argv[2])
+outline_config = sys.argv[3]
+dst.write_text(src.replace('__OUTLINE_CONFIG__', outline_config))
+PY
+chmod 0755 "$GENERATED_DIR/bin/ss-key"
 
 if [[ "$INTEGRATION_PROFILE" == "unproxy" ]]; then
   mkdir -p "$GENERATED_DIR/integrations/unproxy"
@@ -578,7 +909,7 @@ out.extend([
 ])
 dst.write_text('\n'.join(out) + '\n', encoding='utf-8')
 PY
-install -m 0644 "$TMP_FILE" "$HOSTS_FILE"
+cp "$TMP_FILE" "$HOSTS_FILE"
 EOF
   chmod 0755 "$GENERATED_DIR/libexec/iron-hosts-apply"
 
@@ -605,7 +936,7 @@ for line in lines:
     out.append(line)
 dst.write_text('\n'.join(out).rstrip() + '\n', encoding='utf-8')
 PY
-install -m 0644 "$TMP_FILE" "$HOSTS_FILE"
+cp "$TMP_FILE" "$HOSTS_FILE"
 EOF
   chmod 0755 "$GENERATED_DIR/libexec/iron-hosts-clear"
 
@@ -614,11 +945,21 @@ EOF
 set -euo pipefail
 AUTH_DIR="$CLIPROXY_AUTH_DIR"
 AUTH_FILE="\$(ls "\$AUTH_DIR"/*.json 2>/dev/null | head -n 1 || true)"
+ANTIGRAVITY_PROXY_ENV="/home/$PROTECTED_USER/.config/iron-dome/antigravity-proxy.env"
+antigravity_direct_mode() {
+  [ -f "\$ANTIGRAVITY_PROXY_ENV" ] \
+    && grep -Eq '^[[:space:]]*IRON_ANTIGRAVITY_PROXY=[[:space:]]*$' "\$ANTIGRAVITY_PROXY_ENV" \
+    && grep -Eq '^[[:space:]]*IRON_ANTIGRAVITY_EXPORT_PROXY_ENV=no[[:space:]]*$' "\$ANTIGRAVITY_PROXY_ENV"
+}
 if [[ -z "\$AUTH_FILE" || ! -f "\$AUTH_FILE" ]]; then
   echo "[IRON DOME] integration auth file not found, skipping refresh"
   exit 0
 fi
-AUTH_FILE="\$AUTH_FILE" python3 - <<'PY'
+DIRECT_MODE=no
+if antigravity_direct_mode; then
+  DIRECT_MODE=yes
+fi
+AUTH_FILE="\$AUTH_FILE" IRON_ANTIGRAVITY_DIRECT_MODE="\$DIRECT_MODE" python3 - <<'PY'
 import json, subprocess, urllib.parse, time, os
 from pathlib import Path
 auth_file = Path(os.environ['AUTH_FILE'])
@@ -633,7 +974,8 @@ body = urllib.parse.urlencode({
     'refresh_token': refresh,
 })
 resp_file = Path('/tmp/unproxy_refresh.json')
-cmd = ['curl','--proxy','http://127.0.0.1:8119','-sS','--max-time','30','-o',str(resp_file),'-w','%{http_code}','-X','POST','https://oauth2.googleapis.com/token','-H','Content-Type: application/x-www-form-urlencoded','-d',body]
+proxy_args = [] if os.environ.get('IRON_ANTIGRAVITY_DIRECT_MODE') == 'yes' else ['--proxy','http://127.0.0.1:8119']
+cmd = ['curl',*proxy_args,'-sS','--max-time','30','-o',str(resp_file),'-w','%{http_code}','-X','POST','https://oauth2.googleapis.com/token','-H','Content-Type: application/x-www-form-urlencoded','-d',body]
 r = subprocess.run(cmd, capture_output=True, text=True)
 if r.returncode != 0 or r.stdout.strip() != '200':
     raise SystemExit(1)
@@ -663,6 +1005,9 @@ Google forward:        $ENABLE_GOOGLE_FORWARD
 Boot cleanup:          $ENABLE_BOOT_CLEANUP
 Root web traffic:      $INCLUDE_ROOT_WEB
 Transparent MTU:       $TRANSPARENT_MTU
+Windows/host proxy:    $WINDOWS_PROXY_ENABLED
+Windows proxy bind:    $WINDOWS_PROXY_BIND:$WINDOWS_PROXY_PORT
+Windows proxy net:     $WINDOWS_PROXY_NET
 
 Gateway binary:        $CLIPROXY_BIN
 Gateway workdir:       $CLIPROXY_WORKDIR
@@ -675,6 +1020,8 @@ Generated files:
 - $GENERATED_DIR/bin/iron-dome-start
 - $GENERATED_DIR/bin/iron-dome-stop
 - $GENERATED_DIR/bin/iron-dome-open
+- $GENERATED_DIR/bin/iron-windows-proxy
+- $GENERATED_DIR/bin/ss-key
 - $GENERATED_DIR/libexec/iron-transparent-generate
 - $GENERATED_DIR/libexec/iron-dome-lock-apply
 - $GENERATED_DIR/libexec/iron-dome-lock-clear

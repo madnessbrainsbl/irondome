@@ -1,0 +1,7 @@
+# Runtime state: contains your real ss:// key and bridges
+/state/*
+!/state/*.example
+
+# Rendered output: contains the Shadowsocks password in cleartext
+/generated/
+/backups/

@@ -1,0 +1,12 @@
+[Unit]
+Description=Antigravity-only Tor over obfs4 bridges
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/tor -f %h/.config/iron-dome/antigravity-torrc
+ExecReload=/bin/kill -HUP $MAINPID
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

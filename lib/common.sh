@@ -41,8 +41,13 @@ EOF
   printf '\033[0m\n  v%s\n\n' "$IRONDOME_VERSION"
 }
 
-irondome_notice() {
-  :
+# Secrets (ss:// key, bridges) must never land with a world-readable umask.
+write_secret_file() {
+  local path="$1"
+  local content="$2"
+  : > "$path"
+  chmod 0600 "$path"
+  printf '%s\n' "$content" > "$path"
 }
 
 prompt_default() {
@@ -84,6 +89,7 @@ collect_multiline() {
   echo "Enter one line per entry."
   echo "Submit an empty line to finish."
   : > "$target_file"
+  chmod 0600 "$target_file"
   while IFS= read -r line; do
     [[ -z "$line" ]] && break
     printf '%s\n' "$line" >> "$target_file"
@@ -107,6 +113,10 @@ ENABLE_GOOGLE_FORWARD="$ENABLE_GOOGLE_FORWARD"
 ENABLE_BOOT_CLEANUP="$ENABLE_BOOT_CLEANUP"
 INCLUDE_ROOT_WEB="$INCLUDE_ROOT_WEB"
 TRANSPARENT_MTU="$TRANSPARENT_MTU"
+WINDOWS_PROXY_ENABLED="$WINDOWS_PROXY_ENABLED"
+WINDOWS_PROXY_BIND="$WINDOWS_PROXY_BIND"
+WINDOWS_PROXY_PORT="$WINDOWS_PROXY_PORT"
+WINDOWS_PROXY_NET="$WINDOWS_PROXY_NET"
 EOF
 }
 
@@ -119,7 +129,7 @@ load_config() {
   PROTECTED_USER="${PROTECTED_USER:-kali}"
   INTEGRATION_PROFILE="${INTEGRATION_PROFILE:-none}"
   ENABLE_LOCAL_HTTP_PROXY="${ENABLE_LOCAL_HTTP_PROXY:-yes}"
-  INSTALL_PREFIX="${INSTALL_PREFIX:-/opt/madnessbrains/irondome}"
+  INSTALL_PREFIX="${INSTALL_PREFIX:-/opt/irondome}"
   CLIPROXY_BIN="${CLIPROXY_BIN:-/opt/CLIProxyAPIPlus/cliproxy}"
   CLIPROXY_WORKDIR="${CLIPROXY_WORKDIR:-/opt/CLIProxyAPIPlus}"
   CLIPROXY_AUTH_DIR="${CLIPROXY_AUTH_DIR:-/var/lib/cliproxy/auth}"
@@ -130,6 +140,10 @@ load_config() {
   ENABLE_BOOT_CLEANUP="${ENABLE_BOOT_CLEANUP:-yes}"
   INCLUDE_ROOT_WEB="${INCLUDE_ROOT_WEB:-yes}"
   TRANSPARENT_MTU="${TRANSPARENT_MTU:-1200}"
+  WINDOWS_PROXY_ENABLED="${WINDOWS_PROXY_ENABLED:-no}"
+  WINDOWS_PROXY_BIND="${WINDOWS_PROXY_BIND:-0.0.0.0}"
+  WINDOWS_PROXY_PORT="${WINDOWS_PROXY_PORT:-18119}"
+  WINDOWS_PROXY_NET="${WINDOWS_PROXY_NET:-192.168.98.0/24}"
 }
 
 require_state_file() {
@@ -212,6 +226,7 @@ Usage:
   irondome <command>
 
 Commands:
+  menu       Show interactive menu
   setup      Run interactive setup wizard
   install    Install generated files and services
   start      Start strict mode
@@ -225,14 +240,5 @@ Commands:
   backup     Backup current configuration
   restore    Restore configuration backup
   help       Show this help
-EOF
-}
-
-not_implemented() {
-  local command="$1"
-  cat <<EOF
-$command is not implemented yet.
-
-This is a staging CLI skeleton for the future MadnessBrains Iron Dome product.
 EOF
 }

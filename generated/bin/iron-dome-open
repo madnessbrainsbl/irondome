@@ -1,3 +1,0 @@
-#!/bin/bash
-set -euo pipefail
-exec /usr/local/bin/iron-dome-start --no-lock

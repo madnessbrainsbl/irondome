@@ -1,0 +1,13 @@
+[Unit]
+Description=Antigravity-only HTTP proxy through Tor
+After=antigravity-tor.service
+Wants=antigravity-tor.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/privoxy --no-daemon %h/.config/iron-dome/antigravity-privoxy.conf
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

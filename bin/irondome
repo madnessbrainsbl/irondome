@@ -12,12 +12,14 @@ shift || true
 
 if [[ "$COMMAND" != "help" && "$COMMAND" != "-h" && "$COMMAND" != "--help" ]]; then
   irondome_banner
-  irondome_notice
 fi
 
 case "$COMMAND" in
   help|-h|--help)
     irondome_help
+    ;;
+  menu)
+    "$LIB_DIR/menu.sh" "$@"
     ;;
   setup)
     "$LIB_DIR/setup.sh" "$@"

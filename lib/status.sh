@@ -22,10 +22,15 @@ echo "Google forward:  $ENABLE_GOOGLE_FORWARD"
 echo "Boot cleanup:    $ENABLE_BOOT_CLEANUP"
 echo "Root web route:  $INCLUDE_ROOT_WEB"
 echo "MTU:             $TRANSPARENT_MTU"
+echo "Host proxy:      $WINDOWS_PROXY_ENABLED"
+if [[ "$WINDOWS_PROXY_ENABLED" == "yes" ]]; then
+  echo "Host proxy bind: $WINDOWS_PROXY_BIND:$WINDOWS_PROXY_PORT"
+  echo "Host proxy net:  $WINDOWS_PROXY_NET"
+fi
 
 echo
 echo "Generated files present:"
-for path in "$GENERATED_DIR/torrc.strict" "$GENERATED_DIR/outline.json"; do
+for path in "$GENERATED_DIR/config/torrc.strict" "$GENERATED_DIR/config/outline.json"; do
   if [[ -f "$path" ]]; then
     echo "  OK  $path"
   else

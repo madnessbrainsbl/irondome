@@ -25,6 +25,12 @@ ENABLE_OPEN="$(prompt_yes_no 'Enable open mode support' "$ENABLE_OPEN")"
 ENABLE_BOOT_CLEANUP="$(prompt_yes_no 'Enable boot cleanup service' "$ENABLE_BOOT_CLEANUP")"
 INCLUDE_ROOT_WEB="$(prompt_yes_no 'Route root web traffic through strict mode' "$INCLUDE_ROOT_WEB")"
 ENABLE_LOCAL_HTTP_PROXY="$(prompt_yes_no 'Enable local HTTP proxy layer' "$ENABLE_LOCAL_HTTP_PROXY")"
+WINDOWS_PROXY_ENABLED="$(prompt_yes_no 'Expose HTTP proxy to host OS/LAN' "$WINDOWS_PROXY_ENABLED")"
+if [[ "$WINDOWS_PROXY_ENABLED" == "yes" ]]; then
+  WINDOWS_PROXY_BIND="$(prompt_default 'Windows/host proxy bind address' "$WINDOWS_PROXY_BIND")"
+  WINDOWS_PROXY_PORT="$(prompt_default 'Windows/host proxy listen port' "$WINDOWS_PROXY_PORT")"
+  WINDOWS_PROXY_NET="$(prompt_default 'Windows/host proxy client network' "$WINDOWS_PROXY_NET")"
+fi
 
 print_header "Integration profile"
 echo "Available profiles:"
@@ -54,7 +60,7 @@ collect_multiline "$BRIDGES_FILE" "Tor bridges"
 print_header "Outline key"
 echo "Paste your Outline ss:// key and press Enter:"
 IFS= read -r outline_key
-printf '%s\n' "$outline_key" > "$OUTLINE_KEY_FILE"
+write_secret_file "$OUTLINE_KEY_FILE" "$outline_key"
 
 save_config
 

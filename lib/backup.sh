@@ -8,9 +8,13 @@ LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ensure_dirs
 BACKUP_DIR="$ROOT_DIR/backups/$(date +%Y%m%d_%H%M%S)"
 mkdir -p "$BACKUP_DIR"
+chmod 0700 "$BACKUP_DIR"
 
 for file in "$CONFIG_FILE" "$BRIDGES_FILE" "$OUTLINE_KEY_FILE"; do
-  [[ -f "$file" ]] && cp -a "$file" "$BACKUP_DIR/"
+  if [[ -f "$file" ]]; then
+    cp -a "$file" "$BACKUP_DIR/"
+  fi
 done
+chmod 0600 "$BACKUP_DIR"/* 2>/dev/null || true
 
 echo "Saved backup to: $BACKUP_DIR"

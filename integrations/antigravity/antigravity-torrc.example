@@ -1,0 +1,12 @@
+DataDirectory __HOME__/.local/state/iron-dome/tor-antigravity
+SocksPort 127.0.0.1:9150
+ControlPort 127.0.0.1:9151
+CookieAuthentication 1
+UseBridges 1
+ClientTransportPlugin obfs4 exec /usr/bin/obfs4proxy
+ConfluxEnabled 0
+AvoidDiskWrites 1
+ClientUseIPv6 0
+MaxCircuitDirtiness 600
+
+# Add obfs4 Bridge lines here.
