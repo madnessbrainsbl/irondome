@@ -13,8 +13,8 @@ if [[ "$WINDOWS_PROXY_ENABLED" == "yes" && "$ENABLE_LOCAL_HTTP_PROXY" != "yes" &
   exit 1
 fi
 
-require_state_file "$BRIDGES_FILE" "Bridges file is missing. Run: irondome bridges"
-require_state_file "$OUTLINE_KEY_FILE" "Outline key is missing. Run: irondome outline"
+require_state_file "$BRIDGES_FILE" "Bridges are missing. Run: irondome setup (or just: irondome bridges)"
+require_state_file "$OUTLINE_KEY_FILE" "Outline key is missing. Run: irondome setup (or just: irondome outline 'ss://...')"
 
 rm -rf "$GENERATED_DIR"
 mkdir -p "$GENERATED_DIR/systemd" "$GENERATED_DIR/bin" "$GENERATED_DIR/libexec" "$GENERATED_DIR/config"
@@ -845,27 +845,15 @@ esac
 EOF
 chmod 0755 "$GENERATED_DIR/bin/iron-windows-proxy"
 
-python3 - "$ROOT_DIR/scripts/ss-key.example.sh" "$GENERATED_DIR/bin/ss-key" "$INSTALL_PREFIX/config/outline.json" <<'PY'
-from pathlib import Path
-import sys
-
-src = Path(sys.argv[1]).read_text()
-dst = Path(sys.argv[2])
-outline_config = sys.argv[3]
-dst.write_text(src.replace('__OUTLINE_CONFIG__', outline_config))
-PY
+# sed, not python3: on Git Bash the python binary is a native Windows program,
+# so MSYS rewrites target paths like /opt/irondome/... into C:/Program Files/Git/opt/...
+sed "s|__OUTLINE_CONFIG__|$INSTALL_PREFIX/config/outline.json|g" \
+  "$ROOT_DIR/scripts/ss-key.example.sh" > "$GENERATED_DIR/bin/ss-key"
 chmod 0755 "$GENERATED_DIR/bin/ss-key"
 
-python3 - "$ROOT_DIR/scripts/tor-bridges.example.sh" "$GENERATED_DIR/bin/tor-bridges" \
-  "$INSTALL_PREFIX/config/torrc.strict" "$BRIDGES_FILE" <<'PY'
-from pathlib import Path
-import sys
-
-src = Path(sys.argv[1]).read_text()
-dst = Path(sys.argv[2])
-src = src.replace('__TORRC__', sys.argv[3]).replace('__STATE_BRIDGES__', sys.argv[4])
-dst.write_text(src)
-PY
+sed -e "s|__TORRC__|$INSTALL_PREFIX/config/torrc.strict|g" \
+    -e "s|__STATE_BRIDGES__|$BRIDGES_FILE|g" \
+  "$ROOT_DIR/scripts/tor-bridges.example.sh" > "$GENERATED_DIR/bin/tor-bridges"
 chmod 0755 "$GENERATED_DIR/bin/tor-bridges"
 
 if [[ "$INTEGRATION_PROFILE" == "unproxy" ]]; then

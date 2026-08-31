@@ -7,8 +7,7 @@ LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 ensure_dirs
 print_header "Outline key"
-echo "Paste your Outline ss:// key and press Enter:"
-IFS= read -r outline_key
+outline_key="$(read_ss_key "${1:-}")"
 write_secret_file "$OUTLINE_KEY_FILE" "$outline_key"
 echo
 echo "Saved key to: $OUTLINE_KEY_FILE"

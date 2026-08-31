@@ -41,6 +41,25 @@ EOF
   printf '\033[0m\n  v%s\n\n' "$IRONDOME_VERSION"
 }
 
+read_ss_key() {
+  # Argument first so the command is scriptable; `read` alone dies at EOF under set -e.
+  local key="${1:-}"
+  if [[ -z "$key" ]]; then
+    echo "Paste your Outline ss:// key and press Enter:" >&2
+    IFS= read -r key || true
+  fi
+  key="${key//[$'\t\r\n']/}"
+  if [[ -z "$key" ]]; then
+    echo "No Outline key given. Pass it as an argument: irondome outline 'ss://...'" >&2
+    exit 1
+  fi
+  if [[ "$key" != ss://* ]]; then
+    echo "Not an ss:// key: $key" >&2
+    exit 1
+  fi
+  printf '%s' "$key"
+}
+
 # Secrets (ss:// key, bridges) must never land with a world-readable umask.
 write_secret_file() {
   local path="$1"

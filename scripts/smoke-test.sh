@@ -85,6 +85,9 @@ grep -q 'CLIENT_NET="${IRON_WINDOWS_PROXY_NET:-192.168.98.0/24}"' "$REPO/generat
 grep -q 'TORRC="${IRON_TORRC:-/opt/irondome/config/torrc.strict}"' "$REPO/generated/bin/tor-bridges" \
   && echo "OK       tor-bridges points at the installed torrc" \
   || { echo "FAIL     tor-bridges torrc path not substituted"; fail=1; }
+grep -q 'CONFIG_FILE="${IRON_SS_CONFIG:-/opt/irondome/config/outline.json}"' "$REPO/generated/bin/ss-key" \
+  && echo "OK       ss-key points at the installed outline.json" \
+  || { echo "FAIL     ss-key config path not substituted"; fail=1; }
 grep -q '__PROJECT_ROOT__\|__INSTALL_ROOT__\|__CLIPROXY\|__TORRC__\|__STATE_BRIDGES__\|__OUTLINE_CONFIG__' -r "$REPO/generated" \
   && { echo "FAIL     unsubstituted placeholder in generated output"; fail=1; } \
   || echo "OK       no unsubstituted placeholders"
