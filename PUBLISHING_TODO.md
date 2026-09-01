@@ -20,7 +20,9 @@
       лежит в `/etc/shadowsocks-libev/`, проект ставит в `/opt/irondome/config/`.
 - [ ] Прогнать `sudo tor-bridges` с заведомо мёртвым мостом — проверить откат.
 - [ ] `INTEGRATION_PROFILE=none` на системе, где нет `cliproxysvc`.
-- [ ] `shellcheck -S warning bin/irondome lib/*.sh` + GitHub Actions на smoke test.
+- [ ] Первый прогон `.github/workflows/ci.yml` (shellcheck + smoke test + проверка
+      на утечки). shellcheck по этому коду ещё ни разу не гонялся, первый запуск
+      почти наверняка будет красным — разобрать находки и починить.
 
 Минимальный безопасный public-репозиторий состоит из:
 

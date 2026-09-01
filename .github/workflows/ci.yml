@@ -1,0 +1,31 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: Lint shell scripts
+        run: shellcheck -S warning bin/irondome lib/*.sh scripts/*.sh
+
+      # Renders every config and helper, installs them into a throwaway root and
+      # asserts the result. Needs no root, no network and no systemd. Unlike a
+      # run on Windows, the file-permission assertions actually execute here.
+      - name: Smoke test
+        run: bash scripts/smoke-test.sh
+
+      - name: Check for leaked secrets and personal paths
+        run: |
+          ! grep -rInE "ss://[A-Za-z0-9+/=]{10,}|/home/[a-z]+/Desktop|@gmail\.com" \
+            --exclude-dir=.git --exclude-dir=.github . \
+            | grep -v "YWVzLTI1Ni1nY206cGFzcw" \
+            | grep -v "example.com"
